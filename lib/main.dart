@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+
+import 'changelog_view.dart';
+
 import 'package:http/http.dart' as http;
 
 import 'auth.dart';
@@ -927,7 +930,9 @@ class _DashboardPageState extends State<DashboardPage> {
               ),
             ),
             onSelected: (action) {
-              if (action == 'password') {
+              if (action == 'changelog') {
+                showPiControlChangelog(context);
+              } else if (action == 'password') {
                 changeOwnPassword();
               } else if (action == 'logout') {
                 widget.onLogout();
@@ -940,6 +945,16 @@ class _DashboardPageState extends State<DashboardPage> {
                   contentPadding: EdgeInsets.zero,
                   title: Text(widget.session.displayName),
                   subtitle: Text('@${widget.session.username}'),
+                ),
+              ),
+              const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'changelog',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.auto_awesome_outlined),
+                  title: Text('Was ist neu?'),
+                  subtitle: Text('Changelog'),
                 ),
               ),
               const PopupMenuDivider(),

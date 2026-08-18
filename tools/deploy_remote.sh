@@ -21,7 +21,7 @@ sudo mv /tmp/pi-control-web-new "$target/web"
 sudo install -m 0644 /tmp/server.py "$target/server.py"
 sudo chown -R root:root "$target/web" "$target/server.py"
 sudo systemctl restart pi-control
-sleep 5
+sleep 12
 systemctl is-active pi-control
 curl -fsS http://127.0.0.1:8080/api/auth/status
 echo
