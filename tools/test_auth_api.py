@@ -209,6 +209,37 @@ def main():
             "users/viewer/Dokumente/small.txt"
         ).read_bytes() == b"abc"
 
+        search = client.get(
+            "/api/files/search?q=small",
+            headers=auth_header(viewer_token),
+        )
+        assert search.status_code == 200, search.data
+        assert search.get_json()["results"][0]["path"] == "Dokumente/small.txt"
+
+        share = client.post(
+            "/api/files/share",
+            headers=auth_header(viewer_token),
+            json={"path": "Dokumente/small.txt", "hours": 24},
+        )
+        assert share.status_code == 200, share.data
+        shared_file = client.get(
+            f"/api/files/share/{share.get_json()['token']}"
+        )
+        assert shared_file.status_code == 200, shared_file.data
+        assert shared_file.data == b"abc"
+
+        preview_token = client.post(
+            "/api/files/download-token",
+            headers=auth_header(viewer_token),
+            json={"path": "Dokumente/small.txt", "preview": True},
+        )
+        assert preview_token.status_code == 200, preview_token.data
+        preview = client.get(
+            f"/api/files/download/{preview_token.get_json()['token']}"
+        )
+        assert preview.status_code == 200, preview.data
+        assert "attachment" not in preview.headers.get("Content-Disposition", "")
+
         nested_folder = client.post(
             "/api/files/folder",
             headers=auth_header(viewer_token),
@@ -237,11 +268,63 @@ def main():
             "users/viewer/too-much.txt"
         ).exists()
 
+        trashed = client.post(
+            "/api/files/delete",
+            headers=auth_header(viewer_token),
+            json={"path": "Dokumente/small.txt"},
+        )
+        assert trashed.status_code == 200, trashed.data
+        assert not server.FILE_ROOT.joinpath(
+            "users/viewer/Dokumente/small.txt"
+        ).exists()
+
+        trash = client.get(
+            "/api/files/trash",
+            headers=auth_header(viewer_token),
+        )
+        assert trash.status_code == 200, trash.data
+        trash_item_id = trash.get_json()["items"][0]["id"]
+
+        restored = client.post(
+            "/api/files/trash/restore",
+            headers=auth_header(viewer_token),
+            json={"id": trash_item_id},
+        )
+        assert restored.status_code == 200, restored.data
+        assert server.FILE_ROOT.joinpath(
+            "users/viewer/Dokumente/small.txt"
+        ).read_bytes() == b"abc"
+
+        client.post(
+            "/api/files/delete",
+            headers=auth_header(viewer_token),
+            json={"path": "Dokumente/small.txt"},
+        )
+        trash = client.get(
+            "/api/files/trash",
+            headers=auth_header(viewer_token),
+        ).get_json()
+        permanently_deleted = client.post(
+            "/api/files/trash/permanent-delete",
+            headers=auth_header(viewer_token),
+            json={"id": trash["items"][0]["id"]},
+        )
+        assert permanently_deleted.status_code == 200, permanently_deleted.data
+        assert client.get(
+            "/api/files/trash",
+            headers=auth_header(viewer_token),
+        ).get_json()["items"] == []
+
         traversal = client.get(
             "/api/files?path=../",
             headers=auth_header(viewer_token),
         )
         assert traversal.status_code == 409, traversal.data
+        protected_trash = client.get(
+            "/api/files?path=.pi-control-trash",
+            headers=auth_header(viewer_token),
+        )
+        assert protected_trash.status_code == 409, protected_trash.data
         assert client.get(
             "/api/admin/users",
             headers=auth_header(viewer_token),

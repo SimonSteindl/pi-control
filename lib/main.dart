@@ -204,6 +204,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
   List<HistoryPoint> history = [];
   int selectedPageIndex = 0;
+  bool showUpdateNotice = true;
 
   Future<http.Response> _apiGet(
     String path, {
@@ -1004,6 +1005,31 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
 
                 const SizedBox(height: 12),
+
+                if (showUpdateNotice) ...[
+                  Card(
+                    color: Theme.of(context).colorScheme.primaryContainer,
+                    child: ListTile(
+                      leading: const Icon(Icons.system_update_alt_rounded),
+                      title: const Text(
+                        'Pi Control 1.4 ist da',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      subtitle: const Text(
+                        'Suche, Papierkorb, Freigabelinks und Dateivorschau sind neu.',
+                      ),
+                      onTap: () => showPiControlChangelog(context),
+                      trailing: IconButton(
+                        onPressed: () {
+                          setState(() => showUpdateNotice = false);
+                        },
+                        tooltip: 'Hinweis schließen',
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
 
                 StatusOverviewCard(
                   connected: connected,

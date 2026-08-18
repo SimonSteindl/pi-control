@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
@@ -16,6 +17,12 @@ typedef FileApiPost = Future<http.Response> Function(
   Object? body,
   Duration? timeout,
 );
+
+typedef ProtectedFilePost = Future<http.Response> Function(
+  String path,
+  Map<String, dynamic> payload, {
+  Duration? timeout,
+});
 
 class FileManagerView extends StatefulWidget {
   final FileApiGet apiGet;
@@ -51,12 +58,21 @@ class _FileManagerViewState extends State<FileManagerView> {
   List<PiFileEntry> _entries = [];
   bool _loading = false;
   bool _uploading = false;
+  bool _searching = false;
+  bool _showingSearch = false;
+  final TextEditingController _searchController = TextEditingController();
   String? _error;
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   String _responseError(http.Response response) {
@@ -206,9 +222,7 @@ class _FileManagerViewState extends State<FileManagerView> {
       builder: (dialogContext) => AlertDialog(
         icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
         title: Text('${entry.isDirectory ? 'Ordner' : 'Datei'} löschen?'),
-        content: Text(
-          '„${entry.name}“ wird dauerhaft gelöscht. Nicht leere Ordner werden aus Sicherheitsgründen nicht gelöscht.',
-        ),
+        content: Text('„${entry.name}“ wird in den Papierkorb verschoben.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -217,7 +231,7 @@ class _FileManagerViewState extends State<FileManagerView> {
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Löschen'),
+            child: const Text('In Papierkorb'),
           ),
         ],
       ),
@@ -227,8 +241,196 @@ class _FileManagerViewState extends State<FileManagerView> {
 
     await _runFileAction(
       () => _protectedPost('files/delete', {'path': entry.path}),
-      success: '„${entry.name}“ wurde gelöscht.',
+      success: '„${entry.name}“ wurde in den Papierkorb verschoben.',
     );
+  }
+
+  Future<void> _search() async {
+    final query = _searchController.text.trim();
+    if (query.length < 2) {
+      _showMessage('Bitte mindestens zwei Zeichen eingeben.');
+      return;
+    }
+
+    setState(() {
+      _searching = true;
+      _error = null;
+    });
+
+    try {
+      final response = await widget.apiGet(
+        'files/search?q=${Uri.encodeQueryComponent(query)}',
+        null,
+      );
+      if (response.statusCode != 200) {
+        throw Exception(_responseError(response));
+      }
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map || decoded['results'] is! List) {
+        throw Exception('Ungültige Suchantwort vom Raspberry Pi.');
+      }
+
+      final results = <PiFileEntry>[];
+      for (final item in decoded['results'] as List) {
+        if (item is Map) results.add(PiFileEntry.fromJson(item));
+      }
+      if (!mounted) return;
+      setState(() {
+        _entries = results;
+        _showingSearch = true;
+        _searching = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _searching = false;
+        _error = error.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  Future<void> _clearSearch() async {
+    _searchController.clear();
+    setState(() => _showingSearch = false);
+    await _load();
+  }
+
+  bool _isImage(PiFileEntry entry) => {
+    'jpg',
+    'jpeg',
+    'png',
+    'gif',
+    'webp',
+    'bmp',
+    'heic',
+  }.contains(entry.extension);
+
+  bool _isVideo(PiFileEntry entry) =>
+      {'mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v'}.contains(entry.extension);
+
+  bool _canPreview(PiFileEntry entry) => _isImage(entry) || _isVideo(entry);
+
+  Future<Uri> _previewUri(PiFileEntry entry) async {
+    final response = await _protectedPost('files/download-token', {
+      'path': entry.path,
+      'preview': true,
+    });
+    if (response.statusCode != 200) {
+      throw Exception(_responseError(response));
+    }
+    final decoded = jsonDecode(response.body);
+    final token = decoded is Map ? decoded['token']?.toString() : null;
+    if (token == null || token.isEmpty) {
+      throw Exception('Vorschau-Link konnte nicht erstellt werden.');
+    }
+    return Uri.parse(
+      '${widget.apiBase()}/files/download/${Uri.encodeComponent(token)}',
+    );
+  }
+
+  Future<void> _preview(PiFileEntry entry) async {
+    try {
+      final uri = await _previewUri(entry);
+      if (!mounted) return;
+
+      if (_isImage(entry)) {
+        await showDialog<void>(
+          context: context,
+          builder: (context) => Dialog(
+            insetPadding: const EdgeInsets.all(16),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1000, maxHeight: 760),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.image_outlined),
+                    title: Text(entry.name),
+                    trailing: IconButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ),
+                  Flexible(
+                    child: InteractiveViewer(
+                      minScale: 0.5,
+                      maxScale: 5,
+                      child: Image.network(
+                        uri.toString(),
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stackTrace) =>
+                            const Padding(
+                              padding: EdgeInsets.all(40),
+                              child: Text(
+                                'Bildvorschau konnte nicht geladen werden.',
+                              ),
+                            ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+              ),
+            ),
+          ),
+        );
+      } else {
+        final launched = await launchUrl(uri, mode: LaunchMode.platformDefault);
+        if (!launched) {
+          throw Exception('Videovorschau konnte nicht geöffnet werden.');
+        }
+      }
+    } catch (error) {
+      _showMessage(error.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  Future<void> _share(PiFileEntry entry) async {
+    try {
+      final response = await _protectedPost('files/share', {
+        'path': entry.path,
+        'hours': 24,
+      });
+      if (response.statusCode != 200) {
+        throw Exception(_responseError(response));
+      }
+      final decoded = jsonDecode(response.body);
+      final token = decoded is Map ? decoded['token']?.toString() : null;
+      if (token == null || token.isEmpty) {
+        throw Exception('Freigabelink konnte nicht erstellt werden.');
+      }
+      final link =
+          '${widget.apiBase()}/files/share/${Uri.encodeComponent(token)}';
+      await Clipboard.setData(ClipboardData(text: link));
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          icon: const Icon(Icons.link_rounded),
+          title: const Text('Freigabelink kopiert'),
+          content: SelectableText(
+            '$link\n\nDer Link ist 24 Stunden gültig und funktioniert ohne Anmeldung.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Fertig'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      _showMessage(error.toString().replaceFirst('Exception: ', ''));
+    }
+  }
+
+  Future<void> _openTrash() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) =>
+          _TrashDialog(apiGet: widget.apiGet, post: _protectedPost),
+    );
+    await _load();
   }
 
   Future<void> _runFileAction(
@@ -524,6 +726,44 @@ class _FileManagerViewState extends State<FileManagerView> {
                   const SizedBox(height: 16),
                   _buildBreadcrumbs(),
                   const SizedBox(height: 12),
+                  TextField(
+                    controller: _searchController,
+                    textInputAction: TextInputAction.search,
+                    onSubmitted: (_) => _search(),
+                    decoration: InputDecoration(
+                      labelText: 'Dateien und Ordner suchen',
+                      hintText: 'Mindestens zwei Zeichen',
+                      prefixIcon: const Icon(Icons.search_rounded),
+                      suffixIcon: _showingSearch
+                          ? IconButton(
+                              onPressed: _clearSearch,
+                              tooltip: 'Suche schließen',
+                              icon: const Icon(Icons.close_rounded),
+                            )
+                          : IconButton(
+                              onPressed: _searching ? null : _search,
+                              tooltip: 'Suchen',
+                              icon: _searching
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.arrow_forward_rounded),
+                            ),
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                  if (_showingSearch) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      '${_entries.length} Treffer für „${_searchController.text.trim()}“',
+                      style: TextStyle(color: colorScheme.onSurfaceVariant),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
                   Card(
                     child: Padding(
                       padding: const EdgeInsets.all(16),
@@ -591,6 +831,12 @@ class _FileManagerViewState extends State<FileManagerView> {
                           icon: const Icon(Icons.create_new_folder_outlined),
                           label: const Text('Neuer Ordner'),
                         ),
+                      if (widget.canManage)
+                        OutlinedButton.icon(
+                          onPressed: _openTrash,
+                          icon: const Icon(Icons.delete_sweep_outlined),
+                          label: const Text('Papierkorb'),
+                        ),
                       if (_parentPath != null)
                         OutlinedButton.icon(
                           onPressed: () => _load(path: _parentPath),
@@ -638,8 +884,10 @@ class _FileManagerViewState extends State<FileManagerView> {
                               color: colorScheme.onSurfaceVariant,
                             ),
                             const SizedBox(height: 12),
-                            const Text(
-                              'Dieser Ordner ist leer',
+                            Text(
+                              _showingSearch
+                                  ? 'Keine Treffer gefunden'
+                                  : 'Dieser Ordner ist leer',
                               style: TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w700,
@@ -647,7 +895,9 @@ class _FileManagerViewState extends State<FileManagerView> {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              'Lade eine Datei hoch oder erstelle einen Ordner.',
+                              _showingSearch
+                                  ? 'Versuche einen anderen Suchbegriff.'
+                                  : 'Lade eine Datei hoch oder erstelle einen Ordner.',
                               style: TextStyle(
                                 color: colorScheme.onSurfaceVariant,
                               ),
@@ -692,13 +942,24 @@ class _FileManagerViewState extends State<FileManagerView> {
                                     ),
                                   ),
                                   subtitle: Text(
-                                    '${_formatSize(_entries[index].size)}  •  ${_formatDate(_entries[index].modified)}',
+                                    _showingSearch
+                                        ? _entries[index].path
+                                        : '${_formatSize(_entries[index].size)}  •  ${_formatDate(_entries[index].modified)}',
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                   ),
-                                  onTap: () => _entries[index].isDirectory
-                                      ? _load(path: _entries[index].path)
-                                      : _download(_entries[index]),
+                                  onTap: () {
+                                    final entry = _entries[index];
+                                    if (entry.isDirectory) {
+                                      _searchController.clear();
+                                      setState(() => _showingSearch = false);
+                                      _load(path: entry.path);
+                                    } else if (_canPreview(entry)) {
+                                      _preview(entry);
+                                    } else {
+                                      _download(entry);
+                                    }
+                                  },
                                   trailing:
                                       (!_entries[index].isDirectory ||
                                           widget.canManage)
@@ -707,6 +968,10 @@ class _FileManagerViewState extends State<FileManagerView> {
                                           onSelected: (action) {
                                             if (action == 'download') {
                                               _download(_entries[index]);
+                                            } else if (action == 'preview') {
+                                              _preview(_entries[index]);
+                                            } else if (action == 'share') {
+                                              _share(_entries[index]);
                                             } else if (action == 'rename') {
                                               _rename(_entries[index]);
                                             } else if (action == 'move') {
@@ -716,6 +981,16 @@ class _FileManagerViewState extends State<FileManagerView> {
                                             }
                                           },
                                           itemBuilder: (context) => [
+                                            if (_canPreview(_entries[index]))
+                                              const PopupMenuItem(
+                                                value: 'preview',
+                                                child: ListTile(
+                                                  leading: Icon(
+                                                    Icons.visibility_outlined,
+                                                  ),
+                                                  title: Text('Vorschau'),
+                                                ),
+                                              ),
                                             if (!_entries[index].isDirectory)
                                               const PopupMenuItem(
                                                 value: 'download',
@@ -724,6 +999,16 @@ class _FileManagerViewState extends State<FileManagerView> {
                                                     Icons.download_rounded,
                                                   ),
                                                   title: Text('Herunterladen'),
+                                                ),
+                                              ),
+                                            if (!_entries[index].isDirectory)
+                                              const PopupMenuItem(
+                                                value: 'share',
+                                                child: ListTile(
+                                                  leading: Icon(
+                                                    Icons.share_outlined,
+                                                  ),
+                                                  title: Text('Freigabelink'),
                                                 ),
                                               ),
                                             if (widget.canManage)
@@ -798,6 +1083,9 @@ class PiFileEntry {
     required this.size,
     required this.modified,
   });
+
+  String get extension =>
+      name.contains('.') ? name.split('.').last.toLowerCase() : '';
 
   factory PiFileEntry.fromJson(Map<dynamic, dynamic> json) {
     final modified = json['modified'];
@@ -997,6 +1285,268 @@ class _MoveDestinationDialogState extends State<_MoveDestinationDialog> {
           label: const Text('Hierher verschieben'),
         ),
       ],
+    );
+  }
+}
+
+class _TrashDialog extends StatefulWidget {
+  final FileApiGet apiGet;
+  final ProtectedFilePost post;
+
+  const _TrashDialog({required this.apiGet, required this.post});
+
+  @override
+  State<_TrashDialog> createState() => _TrashDialogState();
+}
+
+class _TrashDialogState extends State<_TrashDialog> {
+  List<_TrashItem> _items = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  String _responseError(http.Response response) {
+    try {
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map && decoded['error'] != null) {
+        return decoded['error'].toString();
+      }
+    } catch (_) {
+      // Der HTTP-Status wird als Rückfall verwendet.
+    }
+    return 'HTTP ${response.statusCode}';
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final response = await widget.apiGet('files/trash', null);
+      if (response.statusCode != 200) {
+        throw Exception(_responseError(response));
+      }
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map || decoded['items'] is! List) {
+        throw Exception('Ungültige Papierkorb-Antwort.');
+      }
+      final items = <_TrashItem>[];
+      for (final item in decoded['items'] as List) {
+        if (item is Map) items.add(_TrashItem.fromJson(item));
+      }
+      if (!mounted) return;
+      setState(() {
+        _items = items;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  Future<void> _restore(_TrashItem item) async {
+    final response = await widget.post('files/trash/restore', {'id': item.id});
+    if (response.statusCode != 200) {
+      if (mounted) {
+        setState(() => _error = _responseError(response));
+      }
+      return;
+    }
+    await _load();
+  }
+
+  Future<void> _permanentDelete(_TrashItem item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.warning_amber_rounded, color: Colors.redAccent),
+        title: const Text('Endgültig löschen?'),
+        content: Text(
+          '„${item.name}“ kann danach nicht wiederhergestellt werden.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Abbrechen'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Endgültig löschen'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final response = await widget.post('files/trash/permanent-delete', {
+      'id': item.id,
+    });
+    if (response.statusCode != 200) {
+      if (mounted) setState(() => _error = _responseError(response));
+      return;
+    }
+    await _load();
+  }
+
+  String _formatDate(DateTime date) {
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '${two(date.day)}.${two(date.month)}.${date.year}, '
+        '${two(date.hour)}:${two(date.minute)}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Dialog(
+      insetPadding: const EdgeInsets.all(16),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 700),
+        child: Column(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.delete_sweep_outlined),
+              title: const Text(
+                'Papierkorb',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+              ),
+              subtitle: const Text(
+                'Dateien wiederherstellen oder endgültig löschen',
+              ),
+              trailing: IconButton(
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _error != null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _error!,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: colorScheme.error),
+                            ),
+                            const SizedBox(height: 10),
+                            OutlinedButton.icon(
+                              onPressed: _load,
+                              icon: const Icon(Icons.refresh_rounded),
+                              label: const Text('Nochmal'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : _items.isEmpty
+                  ? const Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.delete_outline_rounded, size: 52),
+                          SizedBox(height: 10),
+                          Text('Der Papierkorb ist leer.'),
+                        ],
+                      ),
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: _items.length,
+                      separatorBuilder: (context, index) =>
+                          const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final item = _items[index];
+                        return ListTile(
+                          leading: Icon(
+                            item.isDirectory
+                                ? Icons.folder_outlined
+                                : Icons.insert_drive_file_outlined,
+                          ),
+                          title: Text(item.name),
+                          subtitle: Text(
+                            '${item.originalPath}\nGelöscht: ${_formatDate(item.deletedAt)}',
+                          ),
+                          isThreeLine: true,
+                          trailing: PopupMenuButton<String>(
+                            onSelected: (action) {
+                              if (action == 'restore') {
+                                _restore(item);
+                              } else if (action == 'delete') {
+                                _permanentDelete(item);
+                              }
+                            },
+                            itemBuilder: (context) => const [
+                              PopupMenuItem(
+                                value: 'restore',
+                                child: ListTile(
+                                  leading: Icon(Icons.restore_rounded),
+                                  title: Text('Wiederherstellen'),
+                                ),
+                              ),
+                              PopupMenuItem(
+                                value: 'delete',
+                                child: ListTile(
+                                  leading: Icon(
+                                    Icons.delete_forever_outlined,
+                                    color: Colors.redAccent,
+                                  ),
+                                  title: Text('Endgültig löschen'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TrashItem {
+  final int id;
+  final String name;
+  final String originalPath;
+  final bool isDirectory;
+  final DateTime deletedAt;
+
+  const _TrashItem({
+    required this.id,
+    required this.name,
+    required this.originalPath,
+    required this.isDirectory,
+    required this.deletedAt,
+  });
+
+  factory _TrashItem.fromJson(Map<dynamic, dynamic> json) {
+    final deleted = json['deleted_at'];
+    return _TrashItem(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      name: json['name']?.toString() ?? 'Unbekannt',
+      originalPath: json['original_path']?.toString() ?? '',
+      isDirectory: json['is_directory'] == true,
+      deletedAt: DateTime.fromMillisecondsSinceEpoch(
+        (deleted is num ? deleted.toInt() : 0) * 1000,
+      ),
     );
   }
 }

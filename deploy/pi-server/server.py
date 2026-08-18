@@ -62,6 +62,10 @@ file_operation_lock = threading.Lock()
 download_token_lock = threading.Lock()
 download_tokens = {}
 DOWNLOAD_TOKEN_LIFETIME_SECONDS = 60
+SHARE_LINK_LIFETIME_SECONDS = 7 * 24 * 60 * 60
+TRASH_DIRECTORY_NAME = ".pi-control-trash"
+SEARCH_RESULT_LIMIT = 100
+SEARCH_VISIT_LIMIT = 25000
 
 SESSION_LIFETIME_SECONDS = 12 * 60 * 60
 REMEMBER_SESSION_LIFETIME_SECONDS = 30 * 24 * 60 * 60
@@ -134,6 +138,35 @@ def initialize_auth_database():
 
             CREATE INDEX IF NOT EXISTS sessions_expires_at
             ON sessions(expires_at);
+
+            CREATE TABLE IF NOT EXISTS trash_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                root_path TEXT NOT NULL,
+                trash_name TEXT NOT NULL,
+                original_path TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                is_directory INTEGER NOT NULL DEFAULT 0,
+                deleted_at INTEGER NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS trash_items_user_id
+            ON trash_items(user_id);
+
+            CREATE TABLE IF NOT EXISTS file_shares (
+                token_hash TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                root_path TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS file_shares_expires_at
+            ON file_shares(expires_at);
         """)
 
         user_columns = {
@@ -1863,6 +1896,8 @@ def set_file_owner(path, directory=False):
 def resolve_file_path(relative_path=""):
     root, _, _ = assigned_file_root()
     normalized = str(relative_path or "").replace("\\", "/").lstrip("/")
+    if normalized.split("/", 1)[0] == TRASH_DIRECTORY_NAME:
+        raise ValueError("Dieser interne Ordner ist geschützt.")
     candidate = (root / normalized).resolve(strict=False)
 
     try:
@@ -1903,6 +1938,7 @@ def validate_file_name(name):
     if (
         not value
         or value in {".", ".."}
+        or value == TRASH_DIRECTORY_NAME
         or "/" in value
         or "\\" in value
         or "\x00" in value
@@ -1930,6 +1966,34 @@ def describe_file(root, path):
     }
 
 
+def hidden_file_entry(path):
+    return path.name == TRASH_DIRECTORY_NAME
+
+
+def current_user_id():
+    return int(g.auth_user["id"])
+
+
+def trash_directory(root):
+    directory = root / TRASH_DIRECTORY_NAME
+    directory.mkdir(mode=0o700, exist_ok=True)
+    try:
+        os.chmod(directory, 0o700)
+    except OSError:
+        pass
+    return directory
+
+
+def resolve_stored_file(root_path, relative_path):
+    root = Path(root_path).resolve(strict=True)
+    candidate = (root / str(relative_path or "")).resolve(strict=False)
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("Ungültiger gespeicherter Dateipfad.") from exc
+    return root, candidate
+
+
 @app.get("/api/files")
 @authentication_required("files_view")
 def api_files():
@@ -1944,7 +2008,7 @@ def api_files():
 
         for child in current.iterdir():
             try:
-                if child.is_symlink():
+                if child.is_symlink() or hidden_file_entry(child):
                     continue
 
                 entries.append(describe_file(root, child))
@@ -1975,6 +2039,62 @@ def api_files():
             "path": current_path,
             "parent": parent_path,
             "entries": entries,
+        })
+    except (OSError, RuntimeError, ValueError) as exc:
+        return file_api_error(str(exc), 409)
+
+
+@app.get("/api/files/search")
+@authentication_required("files_view")
+def api_files_search():
+    query = str(request.args.get("q") or "").strip().casefold()
+    if len(query) < 2:
+        return file_api_error("Bitte mindestens zwei Zeichen eingeben.")
+
+    try:
+        root, _, _ = assigned_file_root()
+        results = []
+        visited = 0
+
+        for current, directories, files in os.walk(root, followlinks=False):
+            directories[:] = [
+                name for name in directories
+                if name != TRASH_DIRECTORY_NAME
+                and not (Path(current) / name).is_symlink()
+            ]
+
+            for name in [*directories, *files]:
+                visited += 1
+                if visited > SEARCH_VISIT_LIMIT:
+                    break
+                if query not in name.casefold():
+                    continue
+
+                path = Path(current) / name
+                try:
+                    if path.is_symlink():
+                        continue
+                    results.append(describe_file(root, path))
+                except (OSError, ValueError):
+                    continue
+
+                if len(results) >= SEARCH_RESULT_LIMIT:
+                    break
+
+            if visited > SEARCH_VISIT_LIMIT or len(results) >= SEARCH_RESULT_LIMIT:
+                break
+
+        results.sort(key=lambda item: (
+            not item["is_directory"], item["path"].casefold()
+        ))
+        return jsonify({
+            "ok": True,
+            "query": query,
+            "results": results,
+            "limited": (
+                visited > SEARCH_VISIT_LIMIT
+                or len(results) >= SEARCH_RESULT_LIMIT
+            ),
         })
     except (OSError, RuntimeError, ValueError) as exc:
         return file_api_error(str(exc), 409)
@@ -2091,17 +2211,146 @@ def api_files_delete():
         if not target.exists():
             return file_api_error("Datei nicht gefunden.", 404)
 
-        if target.is_dir():
-            target.rmdir()
-        else:
-            target.unlink()
+        trash = trash_directory(root)
+        trash_name = f"{int(time.time())}-{secrets.token_hex(8)}-{target.name}"
+        trashed_target = trash / trash_name
+        original_path = relative_file_path(root, target)
+        is_directory = target.is_dir()
 
-        return jsonify({"ok": True})
+        with file_operation_lock:
+            target.rename(trashed_target)
+            try:
+                with auth_connection() as connection:
+                    connection.execute(
+                        """
+                        INSERT INTO trash_items (
+                            user_id, root_path, trash_name, original_path,
+                            display_name, is_directory, deleted_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            current_user_id(), str(root), trash_name,
+                            original_path, target.name, int(is_directory),
+                            int(time.time()),
+                        ),
+                    )
+            except Exception:
+                trashed_target.rename(target)
+                raise
+
+        return jsonify({"ok": True, "trashed": True})
     except OSError as exc:
-        if getattr(exc, "errno", None) in {39, 66}:
-            return file_api_error("Der Ordner ist nicht leer.", 409)
         return file_api_error(str(exc), 409)
     except (RuntimeError, ValueError) as exc:
+        return file_api_error(str(exc), 409)
+
+
+@app.get("/api/files/trash")
+@authentication_required("files_manage")
+def api_files_trash():
+    try:
+        root, _, _ = assigned_file_root()
+        with auth_connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, root_path, original_path, display_name,
+                       is_directory, deleted_at
+                FROM trash_items
+                WHERE user_id = ?
+                ORDER BY deleted_at DESC, id DESC
+                """,
+                (current_user_id(),),
+            ).fetchall()
+
+        items = [
+            {
+                "id": row["id"],
+                "name": row["display_name"],
+                "original_path": row["original_path"],
+                "is_directory": bool(row["is_directory"]),
+                "deleted_at": row["deleted_at"],
+            }
+            for row in rows
+            if Path(row["root_path"]).resolve(strict=False) == root
+        ]
+        return jsonify({"ok": True, "items": items})
+    except (OSError, RuntimeError, ValueError) as exc:
+        return file_api_error(str(exc), 409)
+
+
+def get_trash_item(item_id):
+    with auth_connection() as connection:
+        return connection.execute(
+            "SELECT * FROM trash_items WHERE id = ? AND user_id = ?",
+            (item_id, current_user_id()),
+        ).fetchone()
+
+
+@app.post("/api/files/trash/restore")
+@authentication_required("files_manage")
+def api_files_trash_restore():
+    payload = request.get_json(silent=True) or {}
+    try:
+        item_id = int(payload.get("id"))
+        row = get_trash_item(item_id)
+        if row is None:
+            return file_api_error("Papierkorb-Eintrag nicht gefunden.", 404)
+
+        current_root, _, _ = assigned_file_root()
+        stored_root = Path(row["root_path"]).resolve(strict=True)
+        if stored_root != current_root:
+            return file_api_error("Der ursprüngliche Speicherordner ist nicht mehr zugewiesen.", 409)
+
+        source = trash_directory(current_root) / row["trash_name"]
+        _, target = resolve_stored_file(stored_root, row["original_path"])
+        if not source.exists():
+            return file_api_error("Die Datei ist nicht mehr im Papierkorb.", 404)
+        if target.exists():
+            return file_api_error("Am ursprünglichen Ort ist der Name bereits vergeben.", 409)
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with file_operation_lock:
+            source.rename(target)
+            with auth_connection() as connection:
+                connection.execute("DELETE FROM trash_items WHERE id = ?", (item_id,))
+
+        return jsonify({"ok": True, "path": relative_file_path(current_root, target)})
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        return file_api_error(str(exc), 409)
+
+
+@app.post("/api/files/trash/permanent-delete")
+@authentication_required("files_manage")
+def api_files_trash_permanent_delete():
+    payload = request.get_json(silent=True) or {}
+    try:
+        item_id = int(payload.get("id"))
+        row = get_trash_item(item_id)
+        if row is None:
+            return file_api_error("Papierkorb-Eintrag nicht gefunden.", 404)
+
+        current_root, _, _ = assigned_file_root()
+        stored_root = Path(row["root_path"]).resolve(strict=True)
+        if stored_root != current_root:
+            return file_api_error("Der Speicherordner ist nicht mehr zugewiesen.", 409)
+
+        trash = trash_directory(current_root).resolve(strict=True)
+        target = (trash / row["trash_name"]).resolve(strict=False)
+        try:
+            target.relative_to(trash)
+        except ValueError as exc:
+            raise ValueError("Ungültiger Papierkorb-Pfad.") from exc
+
+        with file_operation_lock:
+            if target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
+            with auth_connection() as connection:
+                connection.execute("DELETE FROM trash_items WHERE id = ?", (item_id,))
+
+        return jsonify({"ok": True})
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
         return file_api_error(str(exc), 409)
 
 
@@ -2191,6 +2440,7 @@ def api_files_download_token():
             download_tokens[token] = {
                 "path": str(target),
                 "root": str(root),
+                "inline": bool(payload.get("preview")),
                 "expires": now + DOWNLOAD_TOKEN_LIFETIME_SECONDS,
             }
 
@@ -2219,7 +2469,85 @@ def api_files_download(token):
         if not target.exists() or not target.is_file():
             return file_api_error("Datei nicht gefunden.", 404)
 
-        return send_file(target, as_attachment=True, download_name=target.name)
+        return send_file(
+            target,
+            as_attachment=not bool(item.get("inline")),
+            download_name=target.name,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        return file_api_error(str(exc), 409)
+
+
+@app.post("/api/files/share")
+@authentication_required("files_view")
+def api_files_share_create():
+    payload = request.get_json(silent=True) or {}
+    try:
+        root, target = resolve_file_path(payload.get("path", ""))
+        if not target.exists() or not target.is_file():
+            return file_api_error("Nur vorhandene Dateien können geteilt werden.", 404)
+
+        requested_hours = int(payload.get("hours", 24))
+        hours = max(1, min(requested_hours, 7 * 24))
+        token = secrets.token_urlsafe(32)
+        now = int(time.time())
+        expires_at = now + hours * 60 * 60
+
+        with auth_connection() as connection:
+            connection.execute(
+                "DELETE FROM file_shares WHERE expires_at <= ?",
+                (now,),
+            )
+            connection.execute(
+                """
+                INSERT INTO file_shares (
+                    token_hash, user_id, root_path, relative_path,
+                    display_name, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    hashlib.sha256(token.encode("utf-8")).hexdigest(),
+                    current_user_id(), str(root),
+                    relative_file_path(root, target), target.name,
+                    now, expires_at,
+                ),
+            )
+
+        return jsonify({
+            "ok": True,
+            "token": token,
+            "expires_at": expires_at,
+        })
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        return file_api_error(str(exc), 409)
+
+
+@app.get("/api/files/share/<token>")
+def api_files_share_download(token):
+    now = int(time.time())
+    try:
+        with auth_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT root_path, relative_path, display_name, expires_at
+                FROM file_shares
+                WHERE token_hash = ? AND expires_at > ?
+                """,
+                (hashlib.sha256(token.encode("utf-8")).hexdigest(), now),
+            ).fetchone()
+
+        if row is None:
+            return file_api_error("Freigabelink ist ungültig oder abgelaufen.", 404)
+
+        _, target = resolve_stored_file(row["root_path"], row["relative_path"])
+        if not target.exists() or not target.is_file():
+            return file_api_error("Die freigegebene Datei wurde nicht gefunden.", 404)
+
+        return send_file(
+            target,
+            as_attachment=False,
+            download_name=row["display_name"],
+        )
     except (OSError, RuntimeError, ValueError) as exc:
         return file_api_error(str(exc), 409)
 

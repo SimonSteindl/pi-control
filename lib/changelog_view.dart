@@ -12,6 +12,18 @@ class _ChangelogDialog extends StatelessWidget {
 
   static const entries = [
     _ChangelogEntry(
+      version: '1.4.0',
+      date: '18. August 2026',
+      title: 'Der große Dateimanager-Ausbau',
+      highlights: [
+        'Schnelle Suche nach Dateien und Ordnern im erlaubten Speicherbereich.',
+        'Papierkorb mit Wiederherstellen und bewusstem endgültigem Löschen.',
+        'Freigabelinks für Dateien, die automatisch nach 24 Stunden ablaufen.',
+        'Bildvorschau direkt in Pi Control und Videovorschau im Browser.',
+        'Update-Hinweis auf der Startseite mit direktem Link zum Changelog.',
+      ],
+    ),
+    _ChangelogEntry(
       version: '1.3.0',
       date: '18. August 2026',
       title: 'Dateien bequem organisieren',
