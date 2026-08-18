@@ -12,6 +12,15 @@ class _ChangelogDialog extends StatelessWidget {
 
   static const entries = [
     _ChangelogEntry(
+      version: '1.5.1',
+      date: '18. August 2026',
+      title: 'Schöner Wartungsmodus',
+      highlights: [
+        'Während Updates erscheint eine moderne Wartungsansicht statt einer Fehlermeldung.',
+        'Pi Control prüft automatisch, wann das Update fertig ist, und kehrt selbstständig zurück.',
+      ],
+    ),
+    _ChangelogEntry(
       version: '1.5.0',
       date: '18. August 2026',
       title: 'Backups, Updates und schnelleres Arbeiten',

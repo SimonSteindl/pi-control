@@ -192,6 +192,7 @@ class _DashboardPageState extends State<DashboardPage> {
   Map<String, dynamic>? data;
   bool loading = true;
   bool connected = false;
+  bool maintenance = false;
   String? error;
 
   Timer? refreshTimer;
@@ -211,7 +212,7 @@ class _DashboardPageState extends State<DashboardPage> {
   String? availableAppVersion;
   String? androidUpdatePath;
 
-  static const clientAppVersion = '1.5.0';
+  static const clientAppVersion = '1.5.1';
 
   Future<http.Response> _apiGet(
     String path, {
@@ -312,6 +313,17 @@ class _DashboardPageState extends State<DashboardPage> {
       stopwatch.stop();
 
       if (response.statusCode != 200) {
+        final responseData = widget.client.decodeObject(response);
+        if (responseData['code'] == 'maintenance') {
+          if (!mounted) return;
+          setState(() {
+            maintenance = true;
+            connected = false;
+            loading = false;
+            error = null;
+          });
+          return;
+        }
         throw Exception('HTTP ${response.statusCode}');
       }
 
@@ -329,6 +341,7 @@ class _DashboardPageState extends State<DashboardPage> {
       setState(() {
         data = result;
         connected = true;
+        maintenance = false;
         loading = false;
         error = null;
         latencyMs = stopwatch.elapsedMilliseconds;
@@ -1028,491 +1041,512 @@ class _DashboardPageState extends State<DashboardPage> {
           ),
         ],
       ),
-      body: IndexedStack(
-        index: currentPageIndex,
-        children: [
-          RefreshIndicator(
-            onRefresh: loadAll,
-            child: ListView(
-              padding: const EdgeInsets.all(16),
+      body: maintenance
+          ? const _MaintenanceView()
+          : IndexedStack(
+              index: currentPageIndex,
               children: [
-                DashboardHeroCard(
-                  connected: connected,
-                  loading: loading,
-                  hostname: data?['hostname']?.toString() ?? 'Raspberry Pi',
-                  uptime: data?['uptime']?['formatted']?.toString() ?? '—',
-                  temperature: temperature,
-                  healthScore: healthScore,
-                  accentColor: widget.accentColor,
-                  onOpenFiles: widget.session.can('files_view')
-                      ? () {
-                          setState(() {
-                            selectedPageIndex = pageKeys.indexOf('files');
-                          });
-                        }
-                      : null,
-                ),
-
-                const SizedBox(height: 12),
-
-                if (availableAppVersion != null && !kIsWeb) ...[
-                  Card(
-                    color: Theme.of(context).colorScheme.tertiaryContainer,
-                    child: ListTile(
-                      leading: const Icon(Icons.download_for_offline_rounded),
-                      title: Text(
-                        'App-Update $availableAppVersion verfügbar',
-                        style: const TextStyle(fontWeight: FontWeight.w800),
-                      ),
-                      subtitle: Text(
-                        defaultTargetPlatform == TargetPlatform.android
-                            ? 'Neue APK herunterladen und installieren.'
-                            : 'Die iPhone-Version wird über TestFlight/App Store aktualisiert.',
-                      ),
-                      trailing: defaultTargetPlatform == TargetPlatform.android
-                          ? FilledButton(
-                              onPressed: openAndroidUpdate,
-                              child: const Text('Herunterladen'),
-                            )
-                          : null,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-
-                if (showUpdateNotice) ...[
-                  Card(
-                    color: Theme.of(context).colorScheme.primaryContainer,
-                    child: ListTile(
-                      leading: const Icon(Icons.system_update_alt_rounded),
-                      title: const Text(
-                        'Pi Control 1.5 ist da',
-                        style: TextStyle(fontWeight: FontWeight.w800),
-                      ),
-                      subtitle: const Text(
-                        'Backups, Freigabeverwaltung, Mehrfachauswahl und App-Updates sind neu.',
-                      ),
-                      onTap: () => showPiControlChangelog(context),
-                      trailing: IconButton(
-                        onPressed: () {
-                          setState(() => showUpdateNotice = false);
-                        },
-                        tooltip: 'Hinweis schließen',
-                        icon: const Icon(Icons.close_rounded),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-
-                StatusOverviewCard(
-                  connected: connected,
-                  loading: loading,
-                  alerts: alertItems,
-                  lastUpdated: formatLastUpdated(),
-                ),
-
-                if (alertItems.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  AlertsCard(alerts: alertItems),
-                ],
-
-                const SizedBox(height: 12),
-
-                HealthScoreCard(
-                  score: healthScore,
-                  alertCount: alertItems.length,
-                ),
-
-                const SizedBox(height: 20),
-
-                const SectionTitle(
-                  icon: Icons.monitor_heart_outlined,
-                  title: 'System',
-                ),
-
-                const SizedBox(height: 12),
-
-                GridView.count(
-                  crossAxisCount: 2,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  mainAxisExtent: 165,
-                  children: [
-                    SystemCard(
-                      icon: Icons.memory,
-                      title: 'CPU',
-                      value: cpuUsage == null
-                          ? '—'
-                          : '${formatNumber(cpuUsage)} %',
-                      subtitle: cpuFrequency == null
-                          ? 'Auslastung'
-                          : '${formatNumber(cpuFrequency)} MHz',
-                      numericValue: cpuUsage,
-                      type: SystemCardType.percent,
-                      accentColor: widget.accentColor,
-                    ),
-                    SystemCard(
-                      icon: Icons.thermostat,
-                      title: 'Temperatur',
-                      value: temperature == null
-                          ? '—'
-                          : '${formatNumber(temperature)} °C',
-                      subtitle: 'CPU',
-                      numericValue: temperature,
-                      type: SystemCardType.temperature,
-                      accentColor: widget.accentColor,
-                    ),
-                    SystemCard(
-                      icon: Icons.memory,
-                      title: 'RAM',
-                      value: ramPercent == null
-                          ? '—'
-                          : '${formatNumber(ramPercent)} %',
-                      subtitle: ramUsed == null || ramTotal == null
-                          ? 'Speicher'
-                          : '${formatNumber(ramUsed)} / ${formatNumber(ramTotal)} MB',
-                      numericValue: ramPercent,
-                      type: SystemCardType.percent,
-                      accentColor: widget.accentColor,
-                    ),
-                    SystemCard(
-                      icon: Icons.sd_storage,
-                      title: 'SD-Karte',
-                      value: sdPercent == null
-                          ? '—'
-                          : '${formatNumber(sdPercent)} %',
-                      subtitle: sdUsed == null || sdTotal == null
-                          ? 'Speicher'
-                          : '${formatNumber(sdUsed)} / ${formatNumber(sdTotal)} GB',
-                      numericValue: sdPercent,
-                      type: SystemCardType.percent,
-                      accentColor: widget.accentColor,
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 12),
-
-                TemperatureStatsCard(
-                  current: temperature,
-                  sessionMax: sessionMaxTemperature,
-                  max24h: max24hTemperature,
-                ),
-
-                const SizedBox(height: 12),
-
-                Card(
-                  clipBehavior: Clip.antiAlias,
-                  child: ExpansionTile(
-                    leading: const Icon(Icons.analytics_outlined),
-                    title: const Text(
-                      'Detaillierte Systemdaten',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    subtitle: const Text('Auslastung und 24-Stunden-Verlauf'),
+                RefreshIndicator(
+                  onRefresh: loadAll,
+                  child: ListView(
+                    padding: const EdgeInsets.all(16),
                     children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                        child: Column(
+                      DashboardHeroCard(
+                        connected: connected,
+                        loading: loading,
+                        hostname:
+                            data?['hostname']?.toString() ?? 'Raspberry Pi',
+                        uptime:
+                            data?['uptime']?['formatted']?.toString() ?? '—',
+                        temperature: temperature,
+                        healthScore: healthScore,
+                        accentColor: widget.accentColor,
+                        onOpenFiles: widget.session.can('files_view')
+                            ? () {
+                                setState(() {
+                                  selectedPageIndex = pageKeys.indexOf('files');
+                                });
+                              }
+                            : null,
+                      ),
+
+                      const SizedBox(height: 12),
+
+                      if (availableAppVersion != null && !kIsWeb) ...[
+                        Card(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .tertiaryContainer,
+                          child: ListTile(
+                            leading: const Icon(
+                              Icons.download_for_offline_rounded,
+                            ),
+                            title: Text(
+                              'App-Update $availableAppVersion verfügbar',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            subtitle: Text(
+                              defaultTargetPlatform == TargetPlatform.android
+                                  ? 'Neue APK herunterladen und installieren.'
+                                  : 'Die iPhone-Version wird über TestFlight/App Store aktualisiert.',
+                            ),
+                            trailing:
+                                defaultTargetPlatform == TargetPlatform.android
+                                ? FilledButton(
+                                    onPressed: openAndroidUpdate,
+                                    child: const Text('Herunterladen'),
+                                  )
+                                : null,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+
+                      if (showUpdateNotice) ...[
+                        Card(
+                          color: Theme.of(context).colorScheme.primaryContainer,
+                          child: ListTile(
+                            leading: const Icon(
+                              Icons.system_update_alt_rounded,
+                            ),
+                            title: const Text(
+                              'Pi Control 1.5.1 ist da',
+                              style: TextStyle(fontWeight: FontWeight.w800),
+                            ),
+                            subtitle: const Text(
+                              'Backups, Freigabeverwaltung, Mehrfachauswahl und App-Updates sind neu.',
+                            ),
+                            onTap: () => showPiControlChangelog(context),
+                            trailing: IconButton(
+                              onPressed: () {
+                                setState(() => showUpdateNotice = false);
+                              },
+                              tooltip: 'Hinweis schließen',
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+
+                      StatusOverviewCard(
+                        connected: connected,
+                        loading: loading,
+                        alerts: alertItems,
+                        lastUpdated: formatLastUpdated(),
+                      ),
+
+                      if (alertItems.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        AlertsCard(alerts: alertItems),
+                      ],
+
+                      const SizedBox(height: 12),
+
+                      HealthScoreCard(
+                        score: healthScore,
+                        alertCount: alertItems.length,
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      const SectionTitle(
+                        icon: Icons.monitor_heart_outlined,
+                        title: 'System',
+                      ),
+
+                      const SizedBox(height: 12),
+
+                      GridView.count(
+                        crossAxisCount: 2,
+                        crossAxisSpacing: 12,
+                        mainAxisSpacing: 12,
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        mainAxisExtent: 165,
+                        children: [
+                          SystemCard(
+                            icon: Icons.memory,
+                            title: 'CPU',
+                            value: cpuUsage == null
+                                ? '—'
+                                : '${formatNumber(cpuUsage)} %',
+                            subtitle: cpuFrequency == null
+                                ? 'Auslastung'
+                                : '${formatNumber(cpuFrequency)} MHz',
+                            numericValue: cpuUsage,
+                            type: SystemCardType.percent,
+                            accentColor: widget.accentColor,
+                          ),
+                          SystemCard(
+                            icon: Icons.thermostat,
+                            title: 'Temperatur',
+                            value: temperature == null
+                                ? '—'
+                                : '${formatNumber(temperature)} °C',
+                            subtitle: 'CPU',
+                            numericValue: temperature,
+                            type: SystemCardType.temperature,
+                            accentColor: widget.accentColor,
+                          ),
+                          SystemCard(
+                            icon: Icons.memory,
+                            title: 'RAM',
+                            value: ramPercent == null
+                                ? '—'
+                                : '${formatNumber(ramPercent)} %',
+                            subtitle: ramUsed == null || ramTotal == null
+                                ? 'Speicher'
+                                : '${formatNumber(ramUsed)} / ${formatNumber(ramTotal)} MB',
+                            numericValue: ramPercent,
+                            type: SystemCardType.percent,
+                            accentColor: widget.accentColor,
+                          ),
+                          SystemCard(
+                            icon: Icons.sd_storage,
+                            title: 'SD-Karte',
+                            value: sdPercent == null
+                                ? '—'
+                                : '${formatNumber(sdPercent)} %',
+                            subtitle: sdUsed == null || sdTotal == null
+                                ? 'Speicher'
+                                : '${formatNumber(sdUsed)} / ${formatNumber(sdTotal)} GB',
+                            numericValue: sdPercent,
+                            type: SystemCardType.percent,
+                            accentColor: widget.accentColor,
+                          ),
+                        ],
+                      ),
+
+                      const SizedBox(height: 12),
+
+                      TemperatureStatsCard(
+                        current: temperature,
+                        sessionMax: sessionMaxTemperature,
+                        max24h: max24hTemperature,
+                      ),
+
+                      const SizedBox(height: 12),
+
+                      Card(
+                        clipBehavior: Clip.antiAlias,
+                        child: ExpansionTile(
+                          leading: const Icon(Icons.analytics_outlined),
+                          title: const Text(
+                            'Detaillierte Systemdaten',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          subtitle: const Text(
+                            'Auslastung und 24-Stunden-Verlauf',
+                          ),
                           children: [
-                            DetailBar(
-                              title: 'CPU',
-                              value: cpuUsage,
-                              suffix: '%',
-                              icon: Icons.memory,
-                              color: widget.accentColor,
-                            ),
-                            const SizedBox(height: 16),
-                            DetailBar(
-                              title: 'RAM',
-                              value: ramPercent,
-                              suffix: '%',
-                              icon: Icons.memory,
-                              color: widget.accentColor,
-                            ),
-                            const SizedBox(height: 16),
-                            DetailBar(
-                              title: 'SD-Karte',
-                              value: sdPercent,
-                              suffix: '%',
-                              icon: Icons.sd_storage,
-                              color: widget.accentColor,
-                            ),
-                            const SizedBox(height: 22),
-                            LiveChartCard(
-                              title: 'CPU – 24 Stunden',
-                              values: cpuHistory,
-                              unit: '%',
-                              icon: Icons.memory,
-                              maxValue: 100,
-                              lineColor: widget.accentColor,
-                            ),
-                            const SizedBox(height: 12),
-                            LiveChartCard(
-                              title: 'RAM – 24 Stunden',
-                              values: ramHistory,
-                              unit: '%',
-                              icon: Icons.storage,
-                              maxValue: 100,
-                              lineColor: widget.accentColor,
-                            ),
-                            const SizedBox(height: 12),
-                            LiveChartCard(
-                              title: 'Temperatur – 24 Stunden',
-                              values: temperatureHistory,
-                              unit: '°C',
-                              icon: Icons.thermostat,
-                              maxValue: 100,
-                              lineColor: Colors.green,
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                              child: Column(
+                                children: [
+                                  DetailBar(
+                                    title: 'CPU',
+                                    value: cpuUsage,
+                                    suffix: '%',
+                                    icon: Icons.memory,
+                                    color: widget.accentColor,
+                                  ),
+                                  const SizedBox(height: 16),
+                                  DetailBar(
+                                    title: 'RAM',
+                                    value: ramPercent,
+                                    suffix: '%',
+                                    icon: Icons.memory,
+                                    color: widget.accentColor,
+                                  ),
+                                  const SizedBox(height: 16),
+                                  DetailBar(
+                                    title: 'SD-Karte',
+                                    value: sdPercent,
+                                    suffix: '%',
+                                    icon: Icons.sd_storage,
+                                    color: widget.accentColor,
+                                  ),
+                                  const SizedBox(height: 22),
+                                  LiveChartCard(
+                                    title: 'CPU – 24 Stunden',
+                                    values: cpuHistory,
+                                    unit: '%',
+                                    icon: Icons.memory,
+                                    maxValue: 100,
+                                    lineColor: widget.accentColor,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  LiveChartCard(
+                                    title: 'RAM – 24 Stunden',
+                                    values: ramHistory,
+                                    unit: '%',
+                                    icon: Icons.storage,
+                                    maxValue: 100,
+                                    lineColor: widget.accentColor,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  LiveChartCard(
+                                    title: 'Temperatur – 24 Stunden',
+                                    values: temperatureHistory,
+                                    unit: '°C',
+                                    icon: Icons.thermostat,
+                                    maxValue: 100,
+                                    lineColor: Colors.green,
+                                  ),
+                                ],
+                              ),
                             ),
                           ],
                         ),
                       ),
-                    ],
-                  ),
-                ),
 
-                const SizedBox(height: 20),
+                      const SizedBox(height: 20),
 
-                const SectionTitle(
-                  icon: Icons.storage_outlined,
-                  title: 'Speicher',
-                ),
-
-                const SizedBox(height: 12),
-
-                StorageCard(
-                  title: 'NAS / USB-Stick',
-                  icon: Icons.usb,
-                  used: usbUsed,
-                  free: usbFree,
-                  total: usbTotal,
-                  percent: usbPercent,
-                  mounted: usb != null,
-                ),
-
-                const SizedBox(height: 12),
-
-                StorageCard(
-                  title: 'SD-Karte',
-                  icon: Icons.sd_storage,
-                  used: sdUsed,
-                  free: sdFree,
-                  total: sdTotal,
-                  percent: sdPercent,
-                  mounted: sd != null,
-                ),
-
-                const SizedBox(height: 20),
-
-                const SectionTitle(
-                  icon: Icons.network_check,
-                  title: 'Netzwerk',
-                ),
-
-                const SizedBox(height: 12),
-
-                NetworkCard(
-                  lanIp: data?['ip']?.toString(),
-                  tailscaleIp: tailscale?['ip']?.toString(),
-                  tailscaleOnline: tailscaleOnline,
-                  latencyMs: latencyMs,
-                  activeConnection: activeConnectionName,
-                ),
-
-                const SizedBox(height: 12),
-
-                ServiceControlCard(
-                  title: 'Samba / NAS',
-                  icon: Icons.folder_shared,
-                  online: sambaOnline,
-                  description: sambaOnline
-                      ? 'Dateifreigabe läuft'
-                      : 'Dateifreigabe ist gestoppt',
-                  onRestart: widget.session.can('system_control')
-                      ? () {
-                          restartService('samba', 'Samba');
-                        }
-                      : null,
-                ),
-
-                const SizedBox(height: 12),
-
-                ServiceControlCard(
-                  title: 'Tailscale',
-                  icon: Icons.vpn_lock,
-                  online: tailscaleOnline,
-                  description: tailscaleOnline
-                      ? 'Fernzugriff verbunden'
-                      : 'Fernzugriff nicht verbunden',
-                  onRestart: widget.session.can('system_control')
-                      ? () {
-                          restartService('tailscale', 'Tailscale');
-                        }
-                      : null,
-                ),
-
-                const SizedBox(height: 20),
-
-                const SectionTitle(icon: Icons.speed, title: 'Benchmark'),
-
-                const SizedBox(height: 12),
-
-                BenchmarkCard(
-                  running: benchmarkRunning,
-                  result: currentBenchmark,
-                  history: benchmarkHistory,
-                  onRun: widget.session.can('benchmark_run')
-                      ? runCpuBenchmark
-                      : null,
-                ),
-
-                const SizedBox(height: 20),
-
-                const SectionTitle(
-                  icon: Icons.info_outline,
-                  title: 'Systeminformationen',
-                ),
-
-                const SizedBox(height: 12),
-
-                SystemInfoCard(
-                  rows: [
-                    InfoRowData(
-                      'Hostname',
-                      data?['hostname']?.toString() ?? '—',
-                    ),
-                    InfoRowData('Modell', system?['model']?.toString() ?? '—'),
-                    InfoRowData(
-                      'Betriebssystem',
-                      system?['os']?.toString() ?? '—',
-                    ),
-                    InfoRowData(
-                      'Kernel',
-                      data?['kernel']?.toString() ??
-                          system?['kernel']?.toString() ??
-                          '—',
-                    ),
-                    InfoRowData(
-                      'CPU-Takt',
-                      cpuFrequency == null
-                          ? '—'
-                          : '${formatNumber(cpuFrequency)} MHz',
-                    ),
-                    InfoRowData(
-                      'Load Average',
-                      system?['load_average']?.toString() ?? '—',
-                    ),
-                    InfoRowData(
-                      'Uptime',
-                      data?['uptime']?['formatted']?.toString() ?? '—',
-                    ),
-                    InfoRowData(
-                      'Warn-Push',
-                      system?['notifications']?.toString() ?? 'ntfy',
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 20),
-
-                if (widget.session.can('system_control')) ...[
-                  const SectionTitle(
-                    icon: Icons.settings_remote,
-                    title: 'Steuerung',
-                  ),
-
-                  const SizedBox(height: 12),
-
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: reboot,
-                      icon: const Icon(Icons.restart_alt),
-                      label: const Text('Raspberry Pi neu starten'),
-                      style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 16),
+                      const SectionTitle(
+                        icon: Icons.storage_outlined,
+                        title: 'Speicher',
                       ),
-                    ),
-                  ),
-                ],
 
-                if (error != null) ...[
-                  const SizedBox(height: 16),
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Icon(Icons.error_outline, color: Colors.red),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              'Verbindungsfehler: $error',
-                              style: const TextStyle(color: Colors.red),
-                            ),
+                      const SizedBox(height: 12),
+
+                      StorageCard(
+                        title: 'NAS / USB-Stick',
+                        icon: Icons.usb,
+                        used: usbUsed,
+                        free: usbFree,
+                        total: usbTotal,
+                        percent: usbPercent,
+                        mounted: usb != null,
+                      ),
+
+                      const SizedBox(height: 12),
+
+                      StorageCard(
+                        title: 'SD-Karte',
+                        icon: Icons.sd_storage,
+                        used: sdUsed,
+                        free: sdFree,
+                        total: sdTotal,
+                        percent: sdPercent,
+                        mounted: sd != null,
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      const SectionTitle(
+                        icon: Icons.network_check,
+                        title: 'Netzwerk',
+                      ),
+
+                      const SizedBox(height: 12),
+
+                      NetworkCard(
+                        lanIp: data?['ip']?.toString(),
+                        tailscaleIp: tailscale?['ip']?.toString(),
+                        tailscaleOnline: tailscaleOnline,
+                        latencyMs: latencyMs,
+                        activeConnection: activeConnectionName,
+                      ),
+
+                      const SizedBox(height: 12),
+
+                      ServiceControlCard(
+                        title: 'Samba / NAS',
+                        icon: Icons.folder_shared,
+                        online: sambaOnline,
+                        description: sambaOnline
+                            ? 'Dateifreigabe läuft'
+                            : 'Dateifreigabe ist gestoppt',
+                        onRestart: widget.session.can('system_control')
+                            ? () {
+                                restartService('samba', 'Samba');
+                              }
+                            : null,
+                      ),
+
+                      const SizedBox(height: 12),
+
+                      ServiceControlCard(
+                        title: 'Tailscale',
+                        icon: Icons.vpn_lock,
+                        online: tailscaleOnline,
+                        description: tailscaleOnline
+                            ? 'Fernzugriff verbunden'
+                            : 'Fernzugriff nicht verbunden',
+                        onRestart: widget.session.can('system_control')
+                            ? () {
+                                restartService('tailscale', 'Tailscale');
+                              }
+                            : null,
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      const SectionTitle(icon: Icons.speed, title: 'Benchmark'),
+
+                      const SizedBox(height: 12),
+
+                      BenchmarkCard(
+                        running: benchmarkRunning,
+                        result: currentBenchmark,
+                        history: benchmarkHistory,
+                        onRun: widget.session.can('benchmark_run')
+                            ? runCpuBenchmark
+                            : null,
+                      ),
+
+                      const SizedBox(height: 20),
+
+                      const SectionTitle(
+                        icon: Icons.info_outline,
+                        title: 'Systeminformationen',
+                      ),
+
+                      const SizedBox(height: 12),
+
+                      SystemInfoCard(
+                        rows: [
+                          InfoRowData(
+                            'Hostname',
+                            data?['hostname']?.toString() ?? '—',
+                          ),
+                          InfoRowData(
+                            'Modell',
+                            system?['model']?.toString() ?? '—',
+                          ),
+                          InfoRowData(
+                            'Betriebssystem',
+                            system?['os']?.toString() ?? '—',
+                          ),
+                          InfoRowData(
+                            'Kernel',
+                            data?['kernel']?.toString() ??
+                                system?['kernel']?.toString() ??
+                                '—',
+                          ),
+                          InfoRowData(
+                            'CPU-Takt',
+                            cpuFrequency == null
+                                ? '—'
+                                : '${formatNumber(cpuFrequency)} MHz',
+                          ),
+                          InfoRowData(
+                            'Load Average',
+                            system?['load_average']?.toString() ?? '—',
+                          ),
+                          InfoRowData(
+                            'Uptime',
+                            data?['uptime']?['formatted']?.toString() ?? '—',
+                          ),
+                          InfoRowData(
+                            'Warn-Push',
+                            system?['notifications']?.toString() ?? 'ntfy',
                           ),
                         ],
                       ),
-                    ),
-                  ),
-                ],
 
-                const SizedBox(height: 24),
+                      const SizedBox(height: 20),
 
-                const Center(
-                  child: Text(
-                    'Erstellt mit Liebe von Stoney22',
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: Colors.grey,
-                      fontWeight: FontWeight.w500,
-                    ),
+                      if (widget.session.can('system_control')) ...[
+                        const SectionTitle(
+                          icon: Icons.settings_remote,
+                          title: 'Steuerung',
+                        ),
+
+                        const SizedBox(height: 12),
+
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            onPressed: reboot,
+                            icon: const Icon(Icons.restart_alt),
+                            label: const Text('Raspberry Pi neu starten'),
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                            ),
+                          ),
+                        ),
+                      ],
+
+                      if (error != null) ...[
+                        const SizedBox(height: 16),
+                        Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Icon(
+                                  Icons.error_outline,
+                                  color: Colors.red,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    'Verbindungsfehler: $error',
+                                    style: const TextStyle(color: Colors.red),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+
+                      const SizedBox(height: 24),
+
+                      const Center(
+                        child: Text(
+                          'Erstellt mit Liebe von Stoney22',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.grey,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(height: 8),
+                    ],
                   ),
                 ),
-
-                const SizedBox(height: 8),
+                if (widget.session.can('files_view'))
+                  FileManagerView(
+                    accentColor: widget.accentColor,
+                    authToken: widget.session.token,
+                    canUpload: widget.session.can('files_upload'),
+                    canManage: widget.session.can('files_manage'),
+                    apiBase: () => widget.client.activeBase,
+                    apiGet: (path, headers) => _apiGet(path, headers: headers),
+                    apiPost: (path, headers, body, timeout) => _apiPost(
+                      path,
+                      headers: headers,
+                      body: body,
+                      timeout: timeout ?? const Duration(seconds: 10),
+                    ),
+                  ),
+                if (widget.session.can('terminal_access'))
+                  TerminalView(
+                    accentColor: widget.accentColor,
+                    apiPost: (path, headers, body, timeout) => _apiPost(
+                      path,
+                      headers: headers,
+                      body: body,
+                      timeout: timeout ?? const Duration(seconds: 20),
+                    ),
+                  ),
+                if (widget.session.can('users_manage'))
+                  UserAdminView(
+                    client: widget.client,
+                    session: widget.session,
+                    onSessionUpdated: widget.onSessionUpdated,
+                    accentColor: widget.accentColor,
+                  ),
               ],
             ),
-          ),
-          if (widget.session.can('files_view'))
-            FileManagerView(
-              accentColor: widget.accentColor,
-              authToken: widget.session.token,
-              canUpload: widget.session.can('files_upload'),
-              canManage: widget.session.can('files_manage'),
-              apiBase: () => widget.client.activeBase,
-              apiGet: (path, headers) => _apiGet(path, headers: headers),
-              apiPost: (path, headers, body, timeout) => _apiPost(
-                path,
-                headers: headers,
-                body: body,
-                timeout: timeout ?? const Duration(seconds: 10),
-              ),
-            ),
-          if (widget.session.can('terminal_access'))
-            TerminalView(
-              accentColor: widget.accentColor,
-              apiPost: (path, headers, body, timeout) => _apiPost(
-                path,
-                headers: headers,
-                body: body,
-                timeout: timeout ?? const Duration(seconds: 20),
-              ),
-            ),
-          if (widget.session.can('users_manage'))
-            UserAdminView(
-              client: widget.client,
-              session: widget.session,
-              onSessionUpdated: widget.onSessionUpdated,
-              accentColor: widget.accentColor,
-            ),
-        ],
-      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: currentPageIndex,
         onDestinationSelected: (index) {
@@ -3433,6 +3467,93 @@ class InfoRowData {
   final String value;
 
   const InfoRowData(this.label, this.value);
+}
+
+class _MaintenanceView extends StatelessWidget {
+  const _MaintenanceView();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 620),
+          child: Container(
+            padding: const EdgeInsets.all(32),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  colors.primaryContainer.withValues(alpha: 0.9),
+                  colors.tertiaryContainer.withValues(alpha: 0.72),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(32),
+              border: Border.all(color: colors.outlineVariant),
+              boxShadow: [
+                BoxShadow(
+                  color: colors.primary.withValues(alpha: 0.16),
+                  blurRadius: 48,
+                  offset: const Offset(0, 20),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 88,
+                  height: 88,
+                  decoration: BoxDecoration(
+                    color: colors.primary,
+                    borderRadius: BorderRadius.circular(27),
+                  ),
+                  child: Icon(
+                    Icons.auto_awesome_rounded,
+                    size: 43,
+                    color: colors.onPrimary,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'Pi Control wird verbessert',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.8,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Gerade wird sicher an der App gearbeitet. Du musst nichts '
+                  'tun – sobald das Update fertig ist, erscheint Pi Control '
+                  'automatisch wieder.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyLarge
+                      ?.copyWith(color: colors.onSurfaceVariant, height: 1.5),
+                ),
+                const SizedBox(height: 28),
+                const LinearProgressIndicator(
+                  borderRadius: BorderRadius.all(Radius.circular(99)),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Update wird installiert …',
+                  style: TextStyle(
+                    color: colors.onSurfaceVariant,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 double? asDouble(dynamic value) {

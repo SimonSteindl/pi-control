@@ -49,6 +49,20 @@ def main():
         assert app_version.status_code == 200, app_version.data
         assert app_version.get_json()["latest_version"] == server.APP_VERSION
 
+        server.MAINTENANCE_FLAG = temp_path / "maintenance.enabled"
+        server.MAINTENANCE_PAGE = temp_path / "maintenance.html"
+        server.MAINTENANCE_PAGE.write_text(
+            "<!doctype html><title>Wartung</title>", encoding="utf-8"
+        )
+        server.MAINTENANCE_FLAG.touch()
+        maintenance_api = client.get("/api/info")
+        assert maintenance_api.status_code == 503
+        assert maintenance_api.get_json()["code"] == "maintenance"
+        maintenance_page = client.get("/")
+        assert maintenance_page.status_code == 503
+        assert b"Wartung" in maintenance_page.data
+        server.MAINTENANCE_FLAG.unlink()
+
         login = client.post("/api/auth/login", json=credentials)
         assert login.status_code == 200, login.data
         admin_login = login.get_json()

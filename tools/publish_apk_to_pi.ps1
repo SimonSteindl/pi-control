@@ -33,7 +33,7 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Übertragung der APK zum Raspberry Pi fehlgeschlagen.'
 }
 
-$remoteCommand = "test -d '$remoteReleaseDirectory' && sudo install -o stoney22 -g stoney22 -m 0664 '$remoteTemporaryPath' '$remoteReleasePath' && stat -c '%n %s bytes' '$remoteReleasePath' && sha256sum '$remoteReleasePath'"
+$remoteCommand = "test -d '$remoteReleaseDirectory' && sudo install -o stoney22 -g stoney22 -m 0664 '$remoteTemporaryPath' '$remoteReleasePath' && stat -c '%n %s bytes' '$remoteReleasePath' && sha256sum '$remoteReleasePath' && rm -f '$remoteTemporaryPath'"
 & ssh -tt $PiHost $remoteCommand
 if ($LASTEXITCODE -ne 0) {
     throw "Veröffentlichung fehlgeschlagen. Der bestehende Ordner $remoteReleaseDirectory wurde nicht verändert oder fehlt."

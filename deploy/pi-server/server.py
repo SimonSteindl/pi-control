@@ -38,7 +38,9 @@ AUTH_DB_FILE = BASE_DIR / "auth.db"
 INITIAL_ADMIN_FILE = BASE_DIR / "initial_admin.json"
 BACKUP_DIRECTORY = Path(USB_PATH) / "Backups" / "Pi-Control"
 BACKUP_SCRIPT = BASE_DIR / "backup.sh"
-APP_VERSION = "1.5.0"
+MAINTENANCE_FLAG = BASE_DIR / "maintenance.enabled"
+MAINTENANCE_PAGE = BASE_DIR / "maintenance.html"
+APP_VERSION = "1.5.1"
 
 HISTORY_INTERVAL_SECONDS = 60
 HISTORY_MAX_POINTS = 24 * 60
@@ -87,6 +89,32 @@ PERMISSION_DEFINITIONS = {
 ALL_PERMISSIONS = set(PERMISSION_DEFINITIONS)
 ADMIN_ONLY_PERMISSIONS = {"terminal_access"}
 ASSIGNABLE_PERMISSIONS = ALL_PERMISSIONS - ADMIN_ONLY_PERMISSIONS
+
+
+@app.before_request
+def maintenance_guard():
+    if not MAINTENANCE_FLAG.exists():
+        return None
+
+    if request.path == "/api/maintenance":
+        return jsonify({
+            "ok": True,
+            "active": True,
+            "message": "Pi Control wird gerade aktualisiert.",
+        })
+
+    if request.path.startswith("/api/"):
+        return jsonify({
+            "ok": False,
+            "error": "Pi Control wird gerade aktualisiert. Gleich geht es weiter.",
+            "code": "maintenance",
+            "retry_after": 10,
+        }), 503
+
+    if MAINTENANCE_PAGE.is_file():
+        return send_file(MAINTENANCE_PAGE), 503
+
+    return "Pi Control wird gerade aktualisiert.", 503
 
 TERMINAL_USER = "pi-terminal"
 TERMINAL_HOME = Path("/home/pi-terminal")
