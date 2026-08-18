@@ -1,0 +1,20 @@
+[Unit]
+Description=Pi Control ngrok tunnel
+After=network-online.target pi-control.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=stoney22
+Environment=HOME=/home/stoney22
+ExecStart=/home/stoney22/pi-control/bin/ngrok http 127.0.0.1:8080 --url=https://shape-squeegee-unblended.ngrok-free.dev --log=stdout --log-format=logfmt
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/stoney22/.config/ngrok
+
+[Install]
+WantedBy=multi-user.target
