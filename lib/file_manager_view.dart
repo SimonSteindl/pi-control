@@ -177,6 +177,29 @@ class _FileManagerViewState extends State<FileManagerView> {
     );
   }
 
+  Future<void> _move(PiFileEntry entry) async {
+    final destination = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => _MoveDestinationDialog(
+        apiGet: widget.apiGet,
+        initialPath: _path,
+        sourcePath: entry.path,
+        sourceName: entry.name,
+        rootName: _rootName,
+      ),
+    );
+
+    if (destination == null) return;
+
+    await _runFileAction(
+      () => _protectedPost('files/move', {
+        'path': entry.path,
+        'destination': destination,
+      }),
+      success: '„${entry.name}“ wurde verschoben.',
+    );
+  }
+
   Future<void> _delete(PiFileEntry entry) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -686,6 +709,8 @@ class _FileManagerViewState extends State<FileManagerView> {
                                               _download(_entries[index]);
                                             } else if (action == 'rename') {
                                               _rename(_entries[index]);
+                                            } else if (action == 'move') {
+                                              _move(_entries[index]);
                                             } else if (action == 'delete') {
                                               _delete(_entries[index]);
                                             }
@@ -709,6 +734,17 @@ class _FileManagerViewState extends State<FileManagerView> {
                                                     Icons.edit_outlined,
                                                   ),
                                                   title: Text('Umbenennen'),
+                                                ),
+                                              ),
+                                            if (widget.canManage)
+                                              const PopupMenuItem(
+                                                value: 'move',
+                                                child: ListTile(
+                                                  leading: Icon(
+                                                    Icons
+                                                        .drive_file_move_outline,
+                                                  ),
+                                                  title: Text('Verschieben'),
                                                 ),
                                               ),
                                             if (widget.canManage)
@@ -773,6 +809,194 @@ class PiFileEntry {
       modified: modified is num
           ? DateTime.fromMillisecondsSinceEpoch(modified.toInt() * 1000)
           : null,
+    );
+  }
+}
+
+class _MoveDestinationDialog extends StatefulWidget {
+  final FileApiGet apiGet;
+  final String initialPath;
+  final String sourcePath;
+  final String sourceName;
+  final String rootName;
+
+  const _MoveDestinationDialog({
+    required this.apiGet,
+    required this.initialPath,
+    required this.sourcePath,
+    required this.sourceName,
+    required this.rootName,
+  });
+
+  @override
+  State<_MoveDestinationDialog> createState() => _MoveDestinationDialogState();
+}
+
+class _MoveDestinationDialogState extends State<_MoveDestinationDialog> {
+  String _path = '';
+  String? _parentPath;
+  List<PiFileEntry> _folders = [];
+  bool _loading = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _path = widget.initialPath;
+    _load(_path);
+  }
+
+  String get _sourceParent {
+    final separator = widget.sourcePath.lastIndexOf('/');
+    return separator < 0 ? '' : widget.sourcePath.substring(0, separator);
+  }
+
+  bool get _canSelect => _path != _sourceParent;
+
+  Future<void> _load(String path) async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final encodedPath = Uri.encodeQueryComponent(path);
+      final response = await widget.apiGet('files?path=$encodedPath', null);
+
+      if (response.statusCode != 200) {
+        throw Exception(_responseError(response));
+      }
+
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map || decoded['entries'] is! List) {
+        throw Exception('Ungültige Antwort vom Raspberry Pi.');
+      }
+
+      final folders = <PiFileEntry>[];
+      for (final item in decoded['entries'] as List) {
+        if (item is! Map) continue;
+        final entry = PiFileEntry.fromJson(item);
+        if (!entry.isDirectory) continue;
+        if (entry.path == widget.sourcePath ||
+            entry.path.startsWith('${widget.sourcePath}/')) {
+          continue;
+        }
+        folders.add(entry);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _path = decoded['path']?.toString() ?? '';
+        _parentPath = decoded['parent']?.toString();
+        _folders = folders;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  String _responseError(http.Response response) {
+    try {
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map && decoded['error'] != null) {
+        return decoded['error'].toString();
+      }
+    } catch (_) {
+      // Bei einer ungültigen Antwort wird der HTTP-Status angezeigt.
+    }
+    return 'HTTP ${response.statusCode}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final currentLabel = _path.isEmpty ? widget.rootName : _path;
+
+    return AlertDialog(
+      icon: const Icon(Icons.drive_file_move_outline),
+      title: Text('„${widget.sourceName}“ verschieben'),
+      content: SizedBox(
+        width: 430,
+        height: 420,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Zielordner: $currentLabel',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 12),
+            if (_parentPath != null)
+              ListTile(
+                leading: const Icon(Icons.arrow_upward_rounded),
+                title: const Text('Eine Ebene nach oben'),
+                onTap: _loading ? null : () => _load(_parentPath!),
+              ),
+            const Divider(height: 1),
+            Expanded(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _error != null
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _error!,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: colorScheme.error),
+                          ),
+                          const SizedBox(height: 10),
+                          OutlinedButton.icon(
+                            onPressed: () => _load(_path),
+                            icon: const Icon(Icons.refresh_rounded),
+                            label: const Text('Nochmal'),
+                          ),
+                        ],
+                      ),
+                    )
+                  : _folders.isEmpty
+                  ? const Center(child: Text('Keine Unterordner vorhanden.'))
+                  : ListView.builder(
+                      itemCount: _folders.length,
+                      itemBuilder: (context, index) {
+                        final folder = _folders[index];
+                        return ListTile(
+                          leading: const Icon(Icons.folder_rounded),
+                          title: Text(
+                            folder.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: const Icon(Icons.chevron_right_rounded),
+                          onTap: () => _load(folder.path),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Abbrechen'),
+        ),
+        FilledButton.icon(
+          onPressed: !_loading && _error == null && _canSelect
+              ? () => Navigator.of(context).pop(_path)
+              : null,
+          icon: const Icon(Icons.drive_file_move_outline),
+          label: const Text('Hierher verschieben'),
+        ),
+      ],
     );
   }
 }

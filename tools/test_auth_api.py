@@ -131,6 +131,7 @@ def main():
                     "dashboard_view",
                     "files_view",
                     "files_upload",
+                    "files_manage",
                     "terminal_access",
                 ],
                 "storage_path": "users/viewer",
@@ -190,6 +191,37 @@ def main():
             content_type="multipart/form-data",
         )
         assert small_upload.status_code == 200, small_upload.data
+
+        destination_folder = client.post(
+            "/api/files/folder",
+            headers=auth_header(viewer_token),
+            json={"path": "", "name": "Dokumente"},
+        )
+        assert destination_folder.status_code == 200, destination_folder.data
+
+        moved = client.post(
+            "/api/files/move",
+            headers=auth_header(viewer_token),
+            json={"path": "small.txt", "destination": "Dokumente"},
+        )
+        assert moved.status_code == 200, moved.data
+        assert server.FILE_ROOT.joinpath(
+            "users/viewer/Dokumente/small.txt"
+        ).read_bytes() == b"abc"
+
+        nested_folder = client.post(
+            "/api/files/folder",
+            headers=auth_header(viewer_token),
+            json={"path": "Dokumente", "name": "Unterordner"},
+        )
+        assert nested_folder.status_code == 200, nested_folder.data
+
+        move_into_itself = client.post(
+            "/api/files/move",
+            headers=auth_header(viewer_token),
+            json={"path": "Dokumente", "destination": "Dokumente/Unterordner"},
+        )
+        assert move_into_itself.status_code == 409, move_into_itself.data
 
         quota_blocked = client.post(
             "/api/files/upload",

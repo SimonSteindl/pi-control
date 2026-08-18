@@ -1968,7 +1968,9 @@ def api_files():
             "ok": True,
             "root_name": storage_path or "NAS / USB-Stick",
             "storage_path": storage_path,
-            "storage_used_bytes": storage_used_bytes(root),
+            "storage_used_bytes": (
+                storage_used_bytes(root) if quota is not None else None
+            ),
             "storage_quota_bytes": quota,
             "path": current_path,
             "parent": parent_path,
@@ -2024,6 +2026,53 @@ def api_files_rename():
 
         source.rename(target)
         return jsonify({"ok": True})
+    except (OSError, RuntimeError, ValueError) as exc:
+        return file_api_error(str(exc), 409)
+
+
+@app.post("/api/files/move")
+@authentication_required("files_manage")
+def api_files_move():
+    payload = request.get_json(silent=True) or {}
+
+    try:
+        root, source = resolve_file_path(payload.get("path", ""))
+        _, destination = resolve_file_path(payload.get("destination", ""))
+
+        if source == root:
+            return file_api_error("Der Hauptordner kann nicht verschoben werden.")
+
+        if not source.exists():
+            return file_api_error("Datei nicht gefunden.", 404)
+
+        if not destination.exists() or not destination.is_dir():
+            return file_api_error("Zielordner nicht gefunden.", 404)
+
+        if destination == source.parent:
+            return file_api_error("Die Datei befindet sich bereits in diesem Ordner.")
+
+        if source.is_dir():
+            try:
+                destination.relative_to(source)
+                return file_api_error(
+                    "Ein Ordner kann nicht in sich selbst verschoben werden.",
+                    409,
+                )
+            except ValueError:
+                pass
+
+        target = destination / source.name
+
+        if target.exists():
+            return file_api_error("Im Zielordner ist dieser Name bereits vergeben.", 409)
+
+        with file_operation_lock:
+            source.rename(target)
+
+        return jsonify({
+            "ok": True,
+            "path": relative_file_path(root, target),
+        })
     except (OSError, RuntimeError, ValueError) as exc:
         return file_api_error(str(exc), 409)
 
