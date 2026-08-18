@@ -61,6 +61,7 @@ class _FileManagerViewState extends State<FileManagerView> {
   bool _searching = false;
   bool _showingSearch = false;
   final TextEditingController _searchController = TextEditingController();
+  final Set<String> _selectedPaths = <String>{};
   String? _error;
 
   @override
@@ -119,6 +120,7 @@ class _FileManagerViewState extends State<FileManagerView> {
       if (!mounted) return;
 
       setState(() {
+        _selectedPaths.clear();
         _path = decoded['path']?.toString() ?? '';
         _parentPath = decoded['parent']?.toString();
         _rootName = decoded['root_name']?.toString() ?? 'NAS / USB-Stick';
@@ -433,6 +435,103 @@ class _FileManagerViewState extends State<FileManagerView> {
     await _load();
   }
 
+  Future<void> _openShares() {
+    return showDialog<void>(
+      context: context,
+      builder: (context) =>
+          _ShareManagerDialog(apiGet: widget.apiGet, post: _protectedPost),
+    );
+  }
+
+  void _toggleSelection(PiFileEntry entry) {
+    setState(() {
+      if (!_selectedPaths.add(entry.path)) {
+        _selectedPaths.remove(entry.path);
+      }
+    });
+  }
+
+  Future<void> _bulkDelete() async {
+    final selected = _entries
+        .where((entry) => _selectedPaths.contains(entry.path))
+        .toList();
+    if (selected.isEmpty) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('${selected.length} Elemente in den Papierkorb?'),
+        content: const Text(
+          'Die Auswahl kann später wiederhergestellt werden.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Abbrechen'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('In Papierkorb'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    var completed = 0;
+    for (final entry in selected) {
+      final response = await _protectedPost('files/delete', {
+        'path': entry.path,
+      });
+      if (response.statusCode == 200) completed++;
+    }
+    _selectedPaths.clear();
+    _showMessage('$completed von ${selected.length} Elementen verschoben.');
+    await _load();
+  }
+
+  Future<void> _bulkMove() async {
+    final selected = _entries
+        .where((entry) => _selectedPaths.contains(entry.path))
+        .toList();
+    if (selected.isEmpty) return;
+
+    final destination = await showDialog<String>(
+      context: context,
+      builder: (context) => _MoveDestinationDialog(
+        apiGet: widget.apiGet,
+        initialPath: _path,
+        sourcePath: selected.first.path,
+        sourceName: '${selected.length} Elemente',
+        rootName: _rootName,
+      ),
+    );
+    if (destination == null) return;
+
+    var completed = 0;
+    for (final entry in selected) {
+      final response = await _protectedPost('files/move', {
+        'path': entry.path,
+        'destination': destination,
+      });
+      if (response.statusCode == 200) completed++;
+    }
+    _selectedPaths.clear();
+    _showMessage('$completed von ${selected.length} Elementen verschoben.');
+    await _load();
+  }
+
+  Future<void> _dropIntoFolder(PiFileEntry source, PiFileEntry folder) async {
+    if (source.path == folder.path) return;
+    await _runFileAction(
+      () => _protectedPost('files/move', {
+        'path': source.path,
+        'destination': folder.path,
+      }),
+      success: '„${source.name}“ wurde nach „${folder.name}“ verschoben.',
+    );
+  }
+
   Future<void> _runFileAction(
     Future<http.Response> Function() action, {
     required String success,
@@ -655,6 +754,59 @@ class _FileManagerViewState extends State<FileManagerView> {
     );
   }
 
+  Widget _entryLeading(PiFileEntry entry, ColorScheme colorScheme) {
+    if (_selectedPaths.isNotEmpty) {
+      return Checkbox(
+        value: _selectedPaths.contains(entry.path),
+        onChanged: (_) => _toggleSelection(entry),
+      );
+    }
+
+    final icon = Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: entryColor(entry, colorScheme).withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(13),
+      ),
+      child: Icon(_iconFor(entry), color: entryColor(entry, colorScheme)),
+    );
+
+    final draggable = LongPressDraggable<PiFileEntry>(
+      data: entry,
+      feedback: Material(
+        color: Colors.transparent,
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(_iconFor(entry)),
+                const SizedBox(width: 8),
+                Text(entry.name),
+              ],
+            ),
+          ),
+        ),
+      ),
+      child: icon,
+    );
+
+    if (entry.isDirectory && widget.canManage) {
+      return DragTarget<PiFileEntry>(
+        onWillAcceptWithDetails: (details) => details.data.path != entry.path,
+        onAcceptWithDetails: (details) => _dropIntoFolder(details.data, entry),
+        builder: (context, candidates, rejected) => AnimatedScale(
+          scale: candidates.isEmpty ? 1 : 1.15,
+          duration: const Duration(milliseconds: 120),
+          child: draggable,
+        ),
+      );
+    }
+    return draggable;
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -837,6 +989,11 @@ class _FileManagerViewState extends State<FileManagerView> {
                           icon: const Icon(Icons.delete_sweep_outlined),
                           label: const Text('Papierkorb'),
                         ),
+                      OutlinedButton.icon(
+                        onPressed: _openShares,
+                        icon: const Icon(Icons.link_rounded),
+                        label: const Text('Freigaben'),
+                      ),
                       if (_parentPath != null)
                         OutlinedButton.icon(
                           onPressed: () => _load(path: _parentPath),
@@ -845,6 +1002,44 @@ class _FileManagerViewState extends State<FileManagerView> {
                         ),
                     ],
                   ),
+                  if (_selectedPaths.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Card(
+                      color: colorScheme.secondaryContainer,
+                      child: Padding(
+                        padding: const EdgeInsets.all(10),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '${_selectedPaths.length} ausgewählt',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              onPressed: _bulkMove,
+                              tooltip: 'Auswahl verschieben',
+                              icon: const Icon(Icons.drive_file_move_outline),
+                            ),
+                            IconButton(
+                              onPressed: _bulkDelete,
+                              tooltip: 'Auswahl in Papierkorb',
+                              icon: const Icon(Icons.delete_outline),
+                            ),
+                            IconButton(
+                              onPressed: () {
+                                setState(() => _selectedPaths.clear());
+                              },
+                              tooltip: 'Auswahl aufheben',
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 14),
                   if (_error != null)
                     Card(
@@ -915,23 +1110,9 @@ class _FileManagerViewState extends State<FileManagerView> {
                             Column(
                               children: [
                                 ListTile(
-                                  leading: Container(
-                                    width: 44,
-                                    height: 44,
-                                    decoration: BoxDecoration(
-                                      color: entryColor(
-                                        _entries[index],
-                                        colorScheme,
-                                      ).withValues(alpha: 0.14),
-                                      borderRadius: BorderRadius.circular(13),
-                                    ),
-                                    child: Icon(
-                                      _iconFor(_entries[index]),
-                                      color: entryColor(
-                                        _entries[index],
-                                        colorScheme,
-                                      ),
-                                    ),
+                                  leading: _entryLeading(
+                                    _entries[index],
+                                    colorScheme,
                                   ),
                                   title: Text(
                                     _entries[index].name,
@@ -950,6 +1131,10 @@ class _FileManagerViewState extends State<FileManagerView> {
                                   ),
                                   onTap: () {
                                     final entry = _entries[index];
+                                    if (_selectedPaths.isNotEmpty) {
+                                      _toggleSelection(entry);
+                                      return;
+                                    }
                                     if (entry.isDirectory) {
                                       _searchController.clear();
                                       setState(() => _showingSearch = false);
@@ -960,6 +1145,8 @@ class _FileManagerViewState extends State<FileManagerView> {
                                       _download(entry);
                                     }
                                   },
+                                  onLongPress: () =>
+                                      _toggleSelection(_entries[index]),
                                   trailing:
                                       (!_entries[index].isDirectory ||
                                           widget.canManage)
@@ -1549,4 +1736,172 @@ class _TrashItem {
       ),
     );
   }
+}
+
+class _ShareManagerDialog extends StatefulWidget {
+  final FileApiGet apiGet;
+  final ProtectedFilePost post;
+
+  const _ShareManagerDialog({required this.apiGet, required this.post});
+
+  @override
+  State<_ShareManagerDialog> createState() => _ShareManagerDialogState();
+}
+
+class _ShareManagerDialogState extends State<_ShareManagerDialog> {
+  List<_ShareItem> _items = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  String _responseError(http.Response response) {
+    try {
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map && decoded['error'] != null) {
+        return decoded['error'].toString();
+      }
+    } catch (_) {}
+    return 'HTTP ${response.statusCode}';
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final response = await widget.apiGet('files/shares', null);
+      if (response.statusCode != 200) {
+        throw Exception(_responseError(response));
+      }
+      final decoded = jsonDecode(response.body);
+      final items = <_ShareItem>[];
+      if (decoded is Map && decoded['shares'] is List) {
+        for (final item in decoded['shares'] as List) {
+          if (item is Map) items.add(_ShareItem.fromJson(item));
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _items = items;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  Future<void> _revoke(_ShareItem item) async {
+    final response = await widget.post('files/shares/revoke', {'id': item.id});
+    if (response.statusCode != 200) {
+      if (mounted) setState(() => _error = _responseError(response));
+      return;
+    }
+    await _load();
+  }
+
+  String _date(DateTime value) {
+    String two(int number) => number.toString().padLeft(2, '0');
+    return '${two(value.day)}.${two(value.month)}.${value.year}, '
+        '${two(value.hour)}:${two(value.minute)}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Dialog(
+      insetPadding: const EdgeInsets.all(16),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720, maxHeight: 680),
+        child: Column(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.link_rounded),
+              title: const Text(
+                'Aktive Freigabelinks',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+              ),
+              subtitle: const Text('Links anzeigen und vorzeitig deaktivieren'),
+              trailing: IconButton(
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _error != null
+                  ? Center(
+                      child: Text(
+                        _error!,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: colors.error),
+                      ),
+                    )
+                  : _items.isEmpty
+                  ? const Center(child: Text('Keine aktiven Freigabelinks.'))
+                  : ListView.separated(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: _items.length,
+                      separatorBuilder: (context, index) =>
+                          const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final item = _items[index];
+                        return ListTile(
+                          leading: const Icon(Icons.insert_link_rounded),
+                          title: Text(item.name),
+                          subtitle: Text(
+                            '${item.path}\nGültig bis ${_date(item.expiresAt)}',
+                          ),
+                          isThreeLine: true,
+                          trailing: IconButton(
+                            onPressed: () => _revoke(item),
+                            tooltip: 'Link deaktivieren',
+                            icon: const Icon(
+                              Icons.link_off_rounded,
+                              color: Colors.redAccent,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ShareItem {
+  final String id;
+  final String name;
+  final String path;
+  final DateTime expiresAt;
+
+  const _ShareItem({
+    required this.id,
+    required this.name,
+    required this.path,
+    required this.expiresAt,
+  });
+
+  factory _ShareItem.fromJson(Map<dynamic, dynamic> json) => _ShareItem(
+    id: json['id']?.toString() ?? '',
+    name: json['name']?.toString() ?? 'Datei',
+    path: json['path']?.toString() ?? '',
+    expiresAt: DateTime.fromMillisecondsSinceEpoch(
+      ((json['expires_at'] as num?)?.toInt() ?? 0) * 1000,
+    ),
+  );
 }

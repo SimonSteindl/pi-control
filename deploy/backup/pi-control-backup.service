@@ -1,0 +1,8 @@
+[Unit]
+Description=Create a Pi Control configuration backup
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/stoney22/pi-control/backup.sh
+User=root

@@ -45,6 +45,10 @@ def main():
         )
         client = server.app.test_client()
 
+        app_version = client.get("/api/app-version")
+        assert app_version.status_code == 200, app_version.data
+        assert app_version.get_json()["latest_version"] == server.APP_VERSION
+
         login = client.post("/api/auth/login", json=credentials)
         assert login.status_code == 200, login.data
         admin_login = login.get_json()
@@ -227,6 +231,25 @@ def main():
         )
         assert shared_file.status_code == 200, shared_file.data
         assert shared_file.data == b"abc"
+
+        shares = client.get(
+            "/api/files/shares",
+            headers=auth_header(viewer_token),
+        )
+        assert shares.status_code == 200, shares.data
+        share_items = shares.get_json()["shares"]
+        assert len(share_items) == 1
+        assert share_items[0]["path"] == "Dokumente/small.txt"
+
+        revoked = client.post(
+            "/api/files/shares/revoke",
+            headers=auth_header(viewer_token),
+            json={"id": share_items[0]["id"]},
+        )
+        assert revoked.status_code == 200, revoked.data
+        assert client.get(
+            f"/api/files/share/{share.get_json()['token']}"
+        ).status_code == 404
 
         preview_token = client.post(
             "/api/files/download-token",

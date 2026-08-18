@@ -12,6 +12,19 @@ class _ChangelogDialog extends StatelessWidget {
 
   static const entries = [
     _ChangelogEntry(
+      version: '1.5.0',
+      date: '18. August 2026',
+      title: 'Backups, Updates und schnelleres Arbeiten',
+      highlights: [
+        'Tägliche automatische Konfigurationsbackups mit 14 Tagen Aufbewahrung.',
+        'Backup-Verwaltung für Administratoren mit manuellem Sofort-Backup.',
+        'Aktive Freigabelinks können angezeigt und vorzeitig deaktiviert werden.',
+        'Mehrfachauswahl für gemeinsames Verschieben und Löschen.',
+        'Dateien lassen sich per Ziehen auf einen Ordner verschieben.',
+        'Native Apps prüfen selbstständig, ob eine neuere Version verfügbar ist.',
+      ],
+    ),
+    _ChangelogEntry(
       version: '1.4.0',
       date: '18. August 2026',
       title: 'Der große Dateimanager-Ausbau',

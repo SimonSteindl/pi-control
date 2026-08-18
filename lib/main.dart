@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'changelog_view.dart';
+import 'backup_view.dart';
 
 import 'package:http/http.dart' as http;
 
@@ -205,6 +208,10 @@ class _DashboardPageState extends State<DashboardPage> {
   List<HistoryPoint> history = [];
   int selectedPageIndex = 0;
   bool showUpdateNotice = true;
+  String? availableAppVersion;
+  String? androidUpdatePath;
+
+  static const clientAppVersion = '1.5.0';
 
   Future<http.Response> _apiGet(
     String path, {
@@ -239,6 +246,7 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void initState() {
     super.initState();
+    checkAppVersion();
     if (widget.session.can('dashboard_view')) {
       loadAll();
 
@@ -254,6 +262,34 @@ class _DashboardPageState extends State<DashboardPage> {
     } else {
       loading = false;
     }
+  }
+
+  Future<void> checkAppVersion() async {
+    try {
+      final response = await _apiGet(
+        'app-version',
+        timeout: const Duration(seconds: 8),
+      );
+      if (response.statusCode != 200) return;
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map) return;
+      final latest = decoded['latest_version']?.toString();
+      if (latest == null || latest == clientAppVersion || !mounted) return;
+      setState(() {
+        availableAppVersion = latest;
+        androidUpdatePath = decoded['android_download']?.toString();
+      });
+    } catch (_) {
+      // Die Updateprüfung darf die normale App-Nutzung nicht blockieren.
+    }
+  }
+
+  Future<void> openAndroidUpdate() async {
+    final path = androidUpdatePath;
+    if (path == null) return;
+    final base = Uri.parse(widget.client.activeBase);
+    final url = Uri.parse('${base.origin}$path');
+    await launchUrl(url, mode: LaunchMode.platformDefault);
   }
 
   @override
@@ -933,6 +969,8 @@ class _DashboardPageState extends State<DashboardPage> {
             onSelected: (action) {
               if (action == 'changelog') {
                 showPiControlChangelog(context);
+              } else if (action == 'backups') {
+                showBackupManager(context, widget.client);
               } else if (action == 'password') {
                 changeOwnPassword();
               } else if (action == 'logout') {
@@ -949,6 +987,17 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
               ),
               const PopupMenuDivider(),
+              if (widget.session.isAdmin)
+                const PopupMenuItem(
+                  value: 'backups',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.backup_outlined),
+                    title: Text('Backups'),
+                    subtitle: Text('Automatisch und manuell'),
+                  ),
+                ),
+              if (widget.session.isAdmin) const PopupMenuDivider(),
               const PopupMenuItem(
                 value: 'changelog',
                 child: ListTile(
@@ -1006,17 +1055,42 @@ class _DashboardPageState extends State<DashboardPage> {
 
                 const SizedBox(height: 12),
 
+                if (availableAppVersion != null && !kIsWeb) ...[
+                  Card(
+                    color: Theme.of(context).colorScheme.tertiaryContainer,
+                    child: ListTile(
+                      leading: const Icon(Icons.download_for_offline_rounded),
+                      title: Text(
+                        'App-Update $availableAppVersion verfügbar',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      subtitle: Text(
+                        defaultTargetPlatform == TargetPlatform.android
+                            ? 'Neue APK herunterladen und installieren.'
+                            : 'Die iPhone-Version wird über TestFlight/App Store aktualisiert.',
+                      ),
+                      trailing: defaultTargetPlatform == TargetPlatform.android
+                          ? FilledButton(
+                              onPressed: openAndroidUpdate,
+                              child: const Text('Herunterladen'),
+                            )
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+
                 if (showUpdateNotice) ...[
                   Card(
                     color: Theme.of(context).colorScheme.primaryContainer,
                     child: ListTile(
                       leading: const Icon(Icons.system_update_alt_rounded),
                       title: const Text(
-                        'Pi Control 1.4 ist da',
+                        'Pi Control 1.5 ist da',
                         style: TextStyle(fontWeight: FontWeight.w800),
                       ),
                       subtitle: const Text(
-                        'Suche, Papierkorb, Freigabelinks und Dateivorschau sind neu.',
+                        'Backups, Freigabeverwaltung, Mehrfachauswahl und App-Updates sind neu.',
                       ),
                       onTap: () => showPiControlChangelog(context),
                       trailing: IconButton(

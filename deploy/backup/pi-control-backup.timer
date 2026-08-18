@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Pi Control configuration backup
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=10m
+Unit=pi-control-backup.service
+
+[Install]
+WantedBy=timers.target

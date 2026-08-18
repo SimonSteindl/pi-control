@@ -36,6 +36,9 @@ BENCHMARK_FILE = BASE_DIR / "benchmark.json"
 BENCHMARK_HISTORY_FILE = BASE_DIR / "benchmark_history.json"
 AUTH_DB_FILE = BASE_DIR / "auth.db"
 INITIAL_ADMIN_FILE = BASE_DIR / "initial_admin.json"
+BACKUP_DIRECTORY = Path(USB_PATH) / "Backups" / "Pi-Control"
+BACKUP_SCRIPT = BASE_DIR / "backup.sh"
+APP_VERSION = "1.5.0"
 
 HISTORY_INTERVAL_SECONDS = 60
 HISTORY_MAX_POINTS = 24 * 60
@@ -2522,6 +2525,59 @@ def api_files_share_create():
         return file_api_error(str(exc), 409)
 
 
+@app.get("/api/files/shares")
+@authentication_required("files_view")
+def api_files_shares_list():
+    now = int(time.time())
+    try:
+        with auth_connection() as connection:
+            connection.execute("DELETE FROM file_shares WHERE expires_at <= ?", (now,))
+            rows = connection.execute(
+                """
+                SELECT token_hash, relative_path, display_name,
+                       created_at, expires_at
+                FROM file_shares
+                WHERE user_id = ? AND expires_at > ?
+                ORDER BY created_at DESC
+                """,
+                (current_user_id(), now),
+            ).fetchall()
+
+        return jsonify({
+            "ok": True,
+            "shares": [
+                {
+                    "id": row["token_hash"],
+                    "path": row["relative_path"],
+                    "name": row["display_name"],
+                    "created_at": row["created_at"],
+                    "expires_at": row["expires_at"],
+                }
+                for row in rows
+            ],
+        })
+    except (OSError, RuntimeError, ValueError) as exc:
+        return file_api_error(str(exc), 409)
+
+
+@app.post("/api/files/shares/revoke")
+@authentication_required("files_view")
+def api_files_shares_revoke():
+    payload = request.get_json(silent=True) or {}
+    share_id = str(payload.get("id") or "").strip()
+    if len(share_id) != 64:
+        return file_api_error("Ungültiger Freigabelink.")
+
+    with auth_connection() as connection:
+        cursor = connection.execute(
+            "DELETE FROM file_shares WHERE token_hash = ? AND user_id = ?",
+            (share_id, current_user_id()),
+        )
+    if cursor.rowcount == 0:
+        return file_api_error("Freigabelink nicht gefunden.", 404)
+    return jsonify({"ok": True})
+
+
 @app.get("/api/files/share/<token>")
 def api_files_share_download(token):
     now = int(time.time())
@@ -2561,6 +2617,85 @@ def api_info():
         return jsonify({
             "error": str(exc),
         }), 500
+
+
+@app.get("/api/app-version")
+def api_app_version():
+    return jsonify({
+        "ok": True,
+        "latest_version": APP_VERSION,
+        "android_download": f"/api/app-update/android/{APP_VERSION}",
+        "ios_distribution": "TestFlight/App Store wird vorbereitet",
+    })
+
+
+@app.get("/api/app-update/android/<version>")
+def api_app_update_android(version):
+    if version != APP_VERSION:
+        return file_api_error("Diese App-Version ist nicht verfügbar.", 404)
+    apk = FILE_ROOT / "App" / ".apk" / f"Pi-Control-{APP_VERSION}.apk"
+    if not apk.exists() or not apk.is_file():
+        return file_api_error("Die Android-Aktualisierung ist noch nicht veröffentlicht.", 404)
+    return send_file(apk, as_attachment=True, download_name=apk.name)
+
+
+def require_admin_account():
+    if not bool(g.auth_user["is_admin"]):
+        return jsonify({
+            "ok": False,
+            "error": "Diese Funktion ist nur für Administratoren verfügbar.",
+            "code": "administrator_required",
+        }), 403
+    return None
+
+
+@app.get("/api/backups")
+@authentication_required("users_manage")
+def api_backups_list():
+    denied = require_admin_account()
+    if denied is not None:
+        return denied
+    try:
+        BACKUP_DIRECTORY.mkdir(parents=True, exist_ok=True)
+        backups = []
+        for path in BACKUP_DIRECTORY.glob("pi-control-*.tar.gz"):
+            try:
+                stat = path.stat()
+                backups.append({
+                    "name": path.name,
+                    "size": stat.st_size,
+                    "created_at": int(stat.st_mtime),
+                })
+            except OSError:
+                continue
+        backups.sort(key=lambda item: item["created_at"], reverse=True)
+        return jsonify({"ok": True, "backups": backups})
+    except OSError as exc:
+        return file_api_error(str(exc), 409)
+
+
+@app.post("/api/backups/create")
+@authentication_required("users_manage")
+def api_backups_create():
+    denied = require_admin_account()
+    if denied is not None:
+        return denied
+    try:
+        result = subprocess.run(
+            [str(BACKUP_SCRIPT)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if result.returncode != 0:
+            return file_api_error(
+                result.stderr.strip() or "Backup konnte nicht erstellt werden.",
+                500,
+            )
+        return jsonify({"ok": True, "name": result.stdout.strip()})
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return file_api_error(str(exc), 500)
 
 
 @app.post("/api/terminal/execute")
