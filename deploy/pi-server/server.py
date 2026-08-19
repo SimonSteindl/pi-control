@@ -43,7 +43,7 @@ BACKUP_DIRECTORY = Path(USB_PATH) / "Backups" / "Pi-Control"
 BACKUP_SCRIPT = BASE_DIR / "backup.sh"
 MAINTENANCE_FLAG = BASE_DIR / "maintenance.enabled"
 MAINTENANCE_PAGE = BASE_DIR / "maintenance.html"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.1"
 
 HISTORY_INTERVAL_SECONDS = 60
 HISTORY_MAX_POINTS = 24 * 60

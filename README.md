@@ -1,17 +1,33 @@
-# pi_control
+# Pi Control
 
-A new Flutter project.
+Pi Control is a self-hosted Flutter dashboard and private cloud for Raspberry
+Pi. It combines system monitoring, file management, users and storage quotas,
+backups, a web terminal, media tools, OCR, encrypted vaults, Docker management,
+scheduled tasks, and secure remote access in one responsive app.
 
-## Getting Started
+## Install
 
-This project is a starting point for a Flutter application.
+- Web app: open your Pi Control HTTPS address in a browser. On iPhone or iPad,
+  use **Share → Add to Home Screen → Open as Web App**.
+- Android: download the current APK from the `App/.apk` directory exposed by
+  your own Pi Control server.
+- Server: see [`deploy/README.md`](deploy/README.md).
 
-A few resources to get you started if this is your first Flutter project:
+## Privacy
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+Pi Control has no central cloud, advertising, or analytics. It connects to the
+Raspberry Pi selected by the user. See [`PRIVACY.md`](PRIVACY.md).
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Building
+
+```bash
+flutter pub get
+flutter analyze
+flutter build apk --release
+flutter build web --release
+```
+
+## License
+
+Copyright 2026 Simon Steindl. Licensed under the
+[Apache License 2.0](LICENSE).

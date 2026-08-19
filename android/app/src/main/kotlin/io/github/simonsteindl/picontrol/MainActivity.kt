@@ -1,4 +1,4 @@
-package com.example.pi_control
+package io.github.simonsteindl.picontrol
 
 import io.flutter.embedding.android.FlutterActivity
 

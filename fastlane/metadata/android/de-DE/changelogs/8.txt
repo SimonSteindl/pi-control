@@ -1,0 +1,2 @@
+Pi Control 2.0: Galerie, OCR, Dateiversionen, ZIP-Werkzeuge, QR-Freigaben,
+verschlüsselte Tresore, Docker-Verwaltung, Organizer, mehrere Pis und mehr.

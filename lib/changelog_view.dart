@@ -12,6 +12,17 @@ class _ChangelogDialog extends StatelessWidget {
 
   static const entries = [
     _ChangelogEntry(
+      version: '2.0.1',
+      date: '19. August 2026',
+      title: 'Bereit für kostenlose App-Stores',
+      highlights: [
+        'Pi Control ist jetzt offiziell unter Apache 2.0 Open Source.',
+        'Neue dauerhafte App-ID für F-Droid, Galaxy Store und AppGallery.',
+        'Datenschutzerklärung und deutsche sowie englische Store-Texte ergänzt.',
+        'Automatische Qualitätsprüfung für neue GitHub-Versionen eingerichtet.',
+      ],
+    ),
+    _ChangelogEntry(
       version: '2.0.0',
       date: '19. August 2026',
       title: 'Deine private Pi-Cloud',

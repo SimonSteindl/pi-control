@@ -1,0 +1,15 @@
+Pi Control connects directly to your own Raspberry Pi and combines system
+monitoring, file management, and a private cloud in one modern app.
+
+Features:
+* Monitor CPU, memory, temperature, storage, and services
+* Upload, move, share, version, and archive files
+* Manage users, permissions, folders, and storage quotas
+* Gallery, playlists, phone media backup, and OCR document scanning
+* Encrypted gocryptfs vaults
+* Backups, Docker containers, and scheduled tasks
+* Secure web terminal and session management
+* Connect multiple Raspberry Pis
+
+Pi Control contains no advertising or central analytics. Your data stays on
+the Raspberry Pi selected by you. A self-hosted Pi Control server is required.

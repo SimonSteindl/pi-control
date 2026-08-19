@@ -237,7 +237,7 @@ class _DashboardPageState extends State<DashboardPage> {
   String? androidUpdatePath;
   List<String> dashboardShortcuts = ['files', 'more', 'backups', 'search'];
 
-  static const clientAppVersion = '2.0.0';
+  static const clientAppVersion = '2.0.1';
 
   Future<http.Response> _apiGet(
     String path, {
@@ -1389,7 +1389,7 @@ class _DashboardPageState extends State<DashboardPage> {
                               Icons.system_update_alt_rounded,
                             ),
                             title: const Text(
-                              'Pi Control 2.0.0 ist da',
+                              'Pi Control 2.0.1 ist da',
                               style: TextStyle(fontWeight: FontWeight.w800),
                             ),
                             subtitle: const Text(

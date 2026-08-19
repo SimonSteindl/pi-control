@@ -1,0 +1,2 @@
+Pi Control 2.0 adds a gallery, OCR, file versions, ZIP tools, QR shares,
+encrypted vaults, Docker management, organizer tools, multiple Pis, and more.

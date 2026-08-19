@@ -1,0 +1,16 @@
+Pi Control verbindet sich direkt mit deinem eigenen Raspberry Pi und vereint
+Systemüberwachung, Dateimanager und private Cloud in einer modernen App.
+
+Funktionen:
+* CPU, RAM, Temperatur, Speicher und Dienste überwachen
+* Dateien hochladen, verschieben, teilen, versionieren und als ZIP verwalten
+* Benutzer, Zugriffsrechte, Ordner und Speicherlimits administrieren
+* Galerie, Wiedergabelisten, Handy-Sicherung und OCR-Dokumentenscanner
+* Verschlüsselte Tresore mit gocryptfs
+* Backups, Docker-Container und geplante Aufgaben verwalten
+* Sicheres Web-Terminal und Sitzungsübersicht
+* Mehrere Raspberry Pis verbinden
+
+Pi Control enthält keine Werbung und kein zentrales Tracking. Deine Daten
+bleiben auf dem von dir ausgewählten Raspberry Pi. Für den Zugriff wird ein
+selbst betriebener Pi-Control-Server benötigt.
