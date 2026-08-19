@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import hashlib
+import html
 import json
 import os
 import platform
@@ -11,9 +12,11 @@ import shutil
 import socket
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.request
+import zipfile
 from functools import wraps
 from pathlib import Path
 
@@ -40,7 +43,7 @@ BACKUP_DIRECTORY = Path(USB_PATH) / "Backups" / "Pi-Control"
 BACKUP_SCRIPT = BASE_DIR / "backup.sh"
 MAINTENANCE_FLAG = BASE_DIR / "maintenance.enabled"
 MAINTENANCE_PAGE = BASE_DIR / "maintenance.html"
-APP_VERSION = "1.5.1"
+APP_VERSION = "2.0.0"
 
 HISTORY_INTERVAL_SECONDS = 60
 HISTORY_MAX_POINTS = 24 * 60
@@ -58,6 +61,7 @@ benchmark_lock = threading.Lock()
 benchmark_data = {}
 benchmark_history = []
 last_benchmark_finished = 0.0
+last_housekeeping_at = 0.0
 
 BENCHMARK_HISTORY_MAX_POINTS = 50
 
@@ -69,6 +73,8 @@ download_tokens = {}
 DOWNLOAD_TOKEN_LIFETIME_SECONDS = 60
 SHARE_LINK_LIFETIME_SECONDS = 7 * 24 * 60 * 60
 TRASH_DIRECTORY_NAME = ".pi-control-trash"
+VERSIONS_DIRECTORY_NAME = ".pi-control-versions"
+VAULTS_DIRECTORY_NAME = ".pi-control-vaults"
 SEARCH_RESULT_LIMIT = 100
 SEARCH_VISIT_LIMIT = 25000
 
@@ -198,6 +204,92 @@ def initialize_auth_database():
 
             CREATE INDEX IF NOT EXISTS file_shares_expires_at
             ON file_shares(expires_at);
+
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                username TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target TEXT NOT NULL DEFAULT '',
+                details TEXT NOT NULL DEFAULT '{}',
+                ip_address TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS audit_events_created_at
+            ON audit_events(created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS file_favorites (
+                user_id INTEGER NOT NULL,
+                root_path TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (user_id, root_path, relative_path),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS recent_files (
+                user_id INTEGER NOT NULL,
+                root_path TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                opened_at INTEGER NOT NULL,
+                PRIMARY KEY (user_id, root_path, relative_path),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS personal_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                completed INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                schedule TEXT NOT NULL,
+                action TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                last_run_at INTEGER,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS playlists (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS playlist_items (
+                playlist_id INTEGER NOT NULL,
+                root_path TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                PRIMARY KEY (playlist_id, root_path, relative_path),
+                FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS encrypted_vaults (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                root_path TEXT NOT NULL,
+                cipher_path TEXT NOT NULL,
+                mount_path TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                UNIQUE (user_id, name),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
         """)
 
         user_columns = {
@@ -212,6 +304,35 @@ def initialize_auth_database():
             connection.execute(
                 "ALTER TABLE users ADD COLUMN storage_quota_bytes INTEGER"
             )
+
+        session_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(sessions)")
+        }
+        for column, definition in {
+            "device_name": "TEXT NOT NULL DEFAULT ''",
+            "user_agent": "TEXT NOT NULL DEFAULT ''",
+            "ip_address": "TEXT NOT NULL DEFAULT ''",
+            "last_seen_at": "INTEGER",
+        }.items():
+            if column not in session_columns:
+                connection.execute(
+                    f"ALTER TABLE sessions ADD COLUMN {column} {definition}"
+                )
+
+        share_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(file_shares)")
+        }
+        for column, definition in {
+            "password_hash": "TEXT",
+            "download_limit": "INTEGER",
+            "download_count": "INTEGER NOT NULL DEFAULT 0",
+        }.items():
+            if column not in share_columns:
+                connection.execute(
+                    f"ALTER TABLE file_shares ADD COLUMN {column} {definition}"
+                )
 
         user_count = connection.execute(
             "SELECT COUNT(*) AS count FROM users"
@@ -397,7 +518,16 @@ def login_rate_limited(username):
 def record_login_failure(username):
     key = (request_ip(), username.casefold())
     with login_attempt_lock:
-        login_attempts.setdefault(key, []).append(time.time())
+        attempts = login_attempts.setdefault(key, [])
+        attempts.append(time.time())
+        count = len(attempts)
+    if count == 5:
+        send_ntfy(
+            "Pi Control: Verdächtige Anmeldung",
+            f"Fünf fehlgeschlagene Versuche für {username or 'unbekannt'} von {request_ip()}.",
+            priority="high",
+            tags="warning,lock",
+        )
 
 
 def clear_login_failures(username):
@@ -481,8 +611,15 @@ def authenticated_user():
             (token_hash, now),
         ).fetchone()
 
+        if row is not None:
+            connection.execute(
+                "UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?",
+                (now, token_hash),
+            )
+
     if row is not None:
         g.auth_token = token
+        g.auth_token_hash = token_hash
 
     return row
 
@@ -1461,6 +1598,7 @@ def process_alert_notifications(alerts):
 
 
 def monitor_loop():
+    global last_housekeeping_at
     while True:
         started = time.monotonic()
 
@@ -1469,12 +1607,69 @@ def monitor_loop():
             add_history_point(info)
             save_history_to_disk()
             process_alert_notifications(info.get("alerts", []))
+            process_scheduled_tasks()
+            if time.time() - last_housekeeping_at >= 6 * 60 * 60:
+                cleanup_expired_trash()
+                last_housekeeping_at = time.time()
         except Exception as exc:
             print(f"[monitor] Fehler: {exc}")
 
         elapsed = time.monotonic() - started
         wait = max(5, HISTORY_INTERVAL_SECONDS - elapsed)
         time.sleep(wait)
+
+
+def cleanup_expired_trash(days=30):
+    cutoff = int(time.time()) - days * 24 * 60 * 60
+    with auth_connection() as connection:
+        rows = connection.execute(
+            "SELECT id, root_path, trash_name FROM trash_items WHERE deleted_at < ?",
+            (cutoff,),
+        ).fetchall()
+        for row in rows:
+            try:
+                root = Path(row["root_path"]).resolve(strict=True)
+                trash = (root / TRASH_DIRECTORY_NAME).resolve(strict=True)
+                target = (trash / row["trash_name"]).resolve(strict=False)
+                target.relative_to(trash)
+                if target.is_dir():
+                    shutil.rmtree(target)
+                elif target.exists():
+                    target.unlink()
+                connection.execute("DELETE FROM trash_items WHERE id = ?", (row["id"],))
+            except (OSError, ValueError):
+                continue
+
+
+def process_scheduled_tasks():
+    current = time.strftime("%H:%M")
+    now = int(time.time())
+    with auth_connection() as connection:
+        rows = connection.execute(
+            """SELECT * FROM scheduled_tasks
+               WHERE enabled = 1 AND schedule = ?
+               AND (last_run_at IS NULL OR last_run_at < ?)""",
+            (current, now - 90),
+        ).fetchall()
+        for row in rows:
+            connection.execute(
+                "UPDATE scheduled_tasks SET last_run_at = ? WHERE id = ?",
+                (now, row["id"]),
+            )
+            action = row["action"]
+            try:
+                if action == "backup":
+                    result = subprocess.run([str(BACKUP_SCRIPT)], capture_output=True, text=True, timeout=120, check=False)
+                    if result.returncode != 0:
+                        raise RuntimeError(result.stderr.strip() or "Backup fehlgeschlagen")
+                    send_ntfy("Pi Control: Backup erstellt", result.stdout.strip(), tags="floppy_disk")
+                elif action == "reboot":
+                    subprocess.Popen(["systemctl", "reboot"])
+                elif action in {"restart_samba", "restart_ngrok"}:
+                    service = "smbd" if action == "restart_samba" else "pi-control-ngrok"
+                    subprocess.run(["systemctl", "restart", service], timeout=30, check=True)
+            except Exception as exc:
+                send_ntfy("Pi Control: Geplante Aufgabe fehlgeschlagen", f"{row['name']}: {exc}", priority="high", tags="warning")
 
 
 @app.get("/api/auth/status")
@@ -1493,6 +1688,7 @@ def api_auth_login():
     password = str(payload.get("password", ""))
     remember_me = payload.get("remember_me") is True
     cookie_only = payload.get("cookie_only") is True
+    device_name = str(payload.get("device_name") or "").strip()[:120]
 
     if login_rate_limited(username):
         return jsonify({
@@ -1535,11 +1731,26 @@ def api_auth_login():
                 token_hash,
                 user_id,
                 created_at,
-                expires_at
-            ) VALUES (?, ?, ?, ?)
+                expires_at,
+                device_name,
+                user_agent,
+                ip_address,
+                last_seen_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (token_hash, user["id"], now, expires_at),
+            (
+                token_hash,
+                user["id"],
+                now,
+                expires_at,
+                device_name,
+                request.headers.get("User-Agent", "")[:300],
+                request.remote_addr or "",
+                now,
+            ),
         )
+
+    write_audit("auth.login", device_name or "Unbekanntes Gerät", user=user)
 
     response = jsonify({
         "ok": True,
@@ -1927,7 +2138,7 @@ def set_file_owner(path, directory=False):
 def resolve_file_path(relative_path=""):
     root, _, _ = assigned_file_root()
     normalized = str(relative_path or "").replace("\\", "/").lstrip("/")
-    if normalized.split("/", 1)[0] == TRASH_DIRECTORY_NAME:
+    if normalized.split("/", 1)[0] in {TRASH_DIRECTORY_NAME, VERSIONS_DIRECTORY_NAME, VAULTS_DIRECTORY_NAME}:
         raise ValueError("Dieser interne Ordner ist geschützt.")
     candidate = (root / normalized).resolve(strict=False)
 
@@ -1998,11 +2209,50 @@ def describe_file(root, path):
 
 
 def hidden_file_entry(path):
-    return path.name == TRASH_DIRECTORY_NAME
+    return path.name in {TRASH_DIRECTORY_NAME, VERSIONS_DIRECTORY_NAME, VAULTS_DIRECTORY_NAME}
+
+
+def version_directory(root, relative_path):
+    key = hashlib.sha256(relative_path.encode("utf-8")).hexdigest()
+    directory = root / VERSIONS_DIRECTORY_NAME / key
+    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(root / VERSIONS_DIRECTORY_NAME, 0o700)
+        os.chmod(directory, 0o700)
+    except OSError:
+        pass
+    return directory
 
 
 def current_user_id():
     return int(g.auth_user["id"])
+
+
+def write_audit(action, target="", details=None, user=None):
+    account = user if user is not None else getattr(g, "auth_user", None)
+    user_id = int(account["id"]) if account is not None else None
+    username = str(account["username"]) if account is not None else "system"
+    try:
+        with auth_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO audit_events (
+                    user_id, username, action, target, details,
+                    ip_address, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user_id,
+                    username,
+                    str(action),
+                    str(target or ""),
+                    json.dumps(details or {}, ensure_ascii=False),
+                    request.remote_addr or "",
+                    int(time.time()),
+                ),
+            )
+    except Exception as exc:
+        print(f"[audit] Speichern fehlgeschlagen: {exc}")
 
 
 def trash_directory(root):
@@ -2137,7 +2387,7 @@ def api_files_create_folder():
     payload = request.get_json(silent=True) or {}
 
     try:
-        _, parent = resolve_file_path(payload.get("path", ""))
+        root, parent = resolve_file_path(payload.get("path", ""))
         name = validate_file_name(payload.get("name"))
 
         if not parent.exists() or not parent.is_dir():
@@ -2150,6 +2400,7 @@ def api_files_create_folder():
 
         target.mkdir()
         set_file_owner(target, directory=True)
+        write_audit("file.folder_create", relative_file_path(root, target))
         return jsonify({"ok": True})
     except (OSError, RuntimeError, ValueError) as exc:
         return file_api_error(str(exc), 409)
@@ -2176,6 +2427,11 @@ def api_files_rename():
             return file_api_error("Dieser Name ist bereits vergeben.", 409)
 
         source.rename(target)
+        write_audit(
+            "file.rename",
+            relative_file_path(root, target),
+            {"from": payload.get("path", "")},
+        )
         return jsonify({"ok": True})
     except (OSError, RuntimeError, ValueError) as exc:
         return file_api_error(str(exc), 409)
@@ -2220,11 +2476,80 @@ def api_files_move():
         with file_operation_lock:
             source.rename(target)
 
+        write_audit(
+            "file.move",
+            relative_file_path(root, target),
+            {"from": payload.get("path", "")},
+        )
+
         return jsonify({
             "ok": True,
             "path": relative_file_path(root, target),
         })
     except (OSError, RuntimeError, ValueError) as exc:
+        return file_api_error(str(exc), 409)
+
+
+@app.post("/api/files/archive")
+@authentication_required("files_manage")
+def api_files_archive():
+    payload = request.get_json(silent=True) or {}
+    paths = payload.get("paths")
+    if not isinstance(paths, list) or not paths or len(paths) > 200:
+        return file_api_error("Bitte 1 bis 200 Elemente auswählen.")
+    try:
+        root, destination = resolve_file_path(payload.get("destination", ""))
+        name = validate_file_name(payload.get("name") or "Archiv.zip")
+        if not name.casefold().endswith(".zip"):
+            name += ".zip"
+        target = destination / name
+        if target.exists():
+            return file_api_error("Das ZIP-Archiv existiert bereits.", 409)
+        sources = []
+        for value in paths:
+            _, source = resolve_file_path(value)
+            if not source.exists() or source == root:
+                return file_api_error(f"Element nicht gefunden: {value}", 404)
+            sources.append(source)
+        with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for source in sources:
+                if source.is_dir():
+                    for child in source.rglob("*"):
+                        if child.is_file() and not child.is_symlink():
+                            archive.write(child, child.relative_to(source.parent))
+                else:
+                    archive.write(source, source.name)
+        set_file_owner(target)
+        write_audit("file.archive", relative_file_path(root, target), {"count": len(sources)})
+        return jsonify({"ok": True, "path": relative_file_path(root, target)})
+    except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
+        return file_api_error(str(exc), 409)
+
+
+@app.post("/api/files/extract")
+@authentication_required("files_manage")
+def api_files_extract():
+    payload = request.get_json(silent=True) or {}
+    try:
+        root, source = resolve_file_path(payload.get("path", ""))
+        if not source.is_file() or source.suffix.casefold() != ".zip":
+            return file_api_error("Bitte eine ZIP-Datei auswählen.")
+        destination = source.parent / source.stem
+        if destination.exists():
+            return file_api_error("Der Zielordner existiert bereits.", 409)
+        destination.mkdir()
+        with zipfile.ZipFile(source, "r") as archive:
+            for member in archive.infolist():
+                member_target = (destination / member.filename).resolve(strict=False)
+                try:
+                    member_target.relative_to(destination.resolve())
+                except ValueError as exc:
+                    raise ValueError("Das ZIP enthält einen unsicheren Pfad.") from exc
+            archive.extractall(destination)
+        set_file_owner(destination, directory=True)
+        write_audit("file.extract", relative_file_path(root, source))
+        return jsonify({"ok": True, "path": relative_file_path(root, destination)})
+    except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
         return file_api_error(str(exc), 409)
 
 
@@ -2268,6 +2593,8 @@ def api_files_delete():
             except Exception:
                 trashed_target.rename(target)
                 raise
+
+        write_audit("file.trash", original_path)
 
         return jsonify({"ok": True, "trashed": True})
     except OSError as exc:
@@ -2404,10 +2731,12 @@ def api_files_upload():
             return file_api_error("Zielordner nicht gefunden.", 404)
 
         target = parent / name
+        replace_existing = str(request.form.get("replace") or "").casefold() in {"1", "true", "yes"}
 
         with file_operation_lock:
             if target.exists():
-                return file_api_error("Die Datei existiert bereits.", 409)
+                if not replace_existing or not target.is_file():
+                    return file_api_error("Die Datei existiert bereits.", 409)
 
             used = storage_used_bytes(root)
             temporary_target = parent / (
@@ -2424,9 +2753,19 @@ def api_files_upload():
                     413,
                 )
 
+            if target.exists():
+                relative_target = relative_file_path(root, target)
+                version_target = version_directory(root, relative_target) / f"{int(time.time())}-{target.name}"
+                shutil.copy2(target, version_target)
             temporary_target.replace(target)
             set_file_owner(target)
             temporary_target = None
+
+        write_audit(
+            "file.upload",
+            relative_file_path(root, target),
+            {"size": upload_size},
+        )
 
         return jsonify({
             "ok": True,
@@ -2442,6 +2781,46 @@ def api_files_upload():
                 temporary_target.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+@app.get("/api/files/versions")
+@authentication_required("files_view")
+def api_file_versions():
+    try:
+        root, target = resolve_file_path(request.args.get("path", ""))
+        relative = relative_file_path(root, target)
+        directory = version_directory(root, relative)
+        versions = []
+        for path in directory.iterdir():
+            if path.is_file():
+                stat = path.stat()
+                versions.append({"id": path.name, "size": stat.st_size, "created_at": int(stat.st_mtime)})
+        versions.sort(key=lambda item: item["created_at"], reverse=True)
+        return jsonify({"ok": True, "versions": versions})
+    except (OSError, RuntimeError, ValueError) as exc:
+        return file_api_error(str(exc), 409)
+
+
+@app.post("/api/files/versions/restore")
+@authentication_required("files_manage")
+def api_file_version_restore():
+    payload = request.get_json(silent=True) or {}
+    try:
+        root, target = resolve_file_path(payload.get("path", ""))
+        relative = relative_file_path(root, target)
+        version_id = validate_file_name(payload.get("id"))
+        source = version_directory(root, relative) / version_id
+        if not source.is_file():
+            return file_api_error("Dateiversion nicht gefunden.", 404)
+        if target.exists():
+            current_version = version_directory(root, relative) / f"{int(time.time())}-{target.name}"
+            shutil.copy2(target, current_version)
+        shutil.copy2(source, target)
+        set_file_owner(target)
+        write_audit("file.version_restore", relative, {"version": version_id})
+        return jsonify({"ok": True})
+    except (OSError, RuntimeError, ValueError) as exc:
+        return file_api_error(str(exc), 409)
 
 
 @app.post("/api/files/download-token")
@@ -2474,6 +2853,27 @@ def api_files_download_token():
                 "inline": bool(payload.get("preview")),
                 "expires": now + DOWNLOAD_TOKEN_LIFETIME_SECONDS,
             }
+
+        relative = relative_file_path(root, target)
+        with auth_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO recent_files (user_id, root_path, relative_path, opened_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, root_path, relative_path)
+                DO UPDATE SET opened_at = excluded.opened_at
+                """,
+                (current_user_id(), str(root), relative, int(time.time())),
+            )
+            connection.execute(
+                """
+                DELETE FROM recent_files WHERE user_id = ? AND rowid NOT IN (
+                    SELECT rowid FROM recent_files WHERE user_id = ?
+                    ORDER BY opened_at DESC LIMIT 50
+                )
+                """,
+                (current_user_id(), current_user_id()),
+            )
 
         return jsonify({
             "ok": True,
@@ -2520,6 +2920,13 @@ def api_files_share_create():
 
         requested_hours = int(payload.get("hours", 24))
         hours = max(1, min(requested_hours, 7 * 24))
+        share_password = str(payload.get("password") or "")
+        if share_password and len(share_password) < 6:
+            return file_api_error("Das Freigabepasswort braucht mindestens 6 Zeichen.")
+        requested_limit = payload.get("download_limit")
+        download_limit = None
+        if requested_limit not in (None, "", 0):
+            download_limit = max(1, min(int(requested_limit), 10000))
         token = secrets.token_urlsafe(32)
         now = int(time.time())
         expires_at = now + hours * 60 * 60
@@ -2533,16 +2940,26 @@ def api_files_share_create():
                 """
                 INSERT INTO file_shares (
                     token_hash, user_id, root_path, relative_path,
-                    display_name, created_at, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    display_name, created_at, expires_at, password_hash,
+                    download_limit, download_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 """,
                 (
                     hashlib.sha256(token.encode("utf-8")).hexdigest(),
                     current_user_id(), str(root),
                     relative_file_path(root, target), target.name,
                     now, expires_at,
+                    generate_password_hash(share_password)
+                    if share_password else None,
+                    download_limit,
                 ),
             )
+
+        write_audit(
+            "share.create",
+            relative_file_path(root, target),
+            {"expires_at": expires_at, "download_limit": download_limit},
+        )
 
         return jsonify({
             "ok": True,
@@ -2563,7 +2980,8 @@ def api_files_shares_list():
             rows = connection.execute(
                 """
                 SELECT token_hash, relative_path, display_name,
-                       created_at, expires_at
+                       created_at, expires_at, password_hash,
+                       download_limit, download_count
                 FROM file_shares
                 WHERE user_id = ? AND expires_at > ?
                 ORDER BY created_at DESC
@@ -2580,6 +2998,9 @@ def api_files_shares_list():
                     "name": row["display_name"],
                     "created_at": row["created_at"],
                     "expires_at": row["expires_at"],
+                    "password_protected": bool(row["password_hash"]),
+                    "download_limit": row["download_limit"],
+                    "download_count": row["download_count"],
                 }
                 for row in rows
             ],
@@ -2603,17 +3024,19 @@ def api_files_shares_revoke():
         )
     if cursor.rowcount == 0:
         return file_api_error("Freigabelink nicht gefunden.", 404)
+    write_audit("share.revoke", share_id[:12])
     return jsonify({"ok": True})
 
 
-@app.get("/api/files/share/<token>")
+@app.route("/api/files/share/<token>", methods=["GET", "POST"])
 def api_files_share_download(token):
     now = int(time.time())
     try:
         with auth_connection() as connection:
             row = connection.execute(
                 """
-                SELECT root_path, relative_path, display_name, expires_at
+                SELECT root_path, relative_path, display_name, expires_at,
+                       password_hash, download_limit, download_count
                 FROM file_shares
                 WHERE token_hash = ? AND expires_at > ?
                 """,
@@ -2623,9 +3046,27 @@ def api_files_share_download(token):
         if row is None:
             return file_api_error("Freigabelink ist ungültig oder abgelaufen.", 404)
 
+        supplied_password = request.headers.get("X-Share-Password", "") or str(request.form.get("password") or "")
+        if row["password_hash"] and not check_password_hash(row["password_hash"], supplied_password):
+            error = "Falsches Passwort." if request.method == "POST" else ""
+            safe_name = html.escape(row["display_name"])
+            safe_error = html.escape(error)
+            return f"""<!doctype html><html lang='de'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Geschützte Freigabe</title><style>*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#07111f;color:#eef7ff;font-family:system-ui}}main{{width:min(92vw,460px);padding:32px;border-radius:28px;background:#111e31;border:1px solid #293a51;box-shadow:0 24px 70px #0008}}h1{{margin-top:0}}p{{color:#aebfd1}}input{{width:100%;padding:14px;border-radius:12px;border:1px solid #42536b;background:#091525;color:white;font-size:16px}}button{{width:100%;margin-top:14px;padding:14px;border:0;border-radius:12px;background:#3299f5;color:white;font-weight:800;font-size:16px}}.error{{color:#ff8f8f}}</style></head><body><main><h1>🔒 Geschützte Freigabe</h1><p>{safe_name}</p><form method='post'><input type='password' name='password' minlength='6' autofocus required placeholder='Freigabepasswort'><button type='submit'>Datei öffnen</button></form><p class='error'>{safe_error}</p></main></body></html>""", 401 if error else 200
+        if (
+            row["download_limit"] is not None
+            and row["download_count"] >= row["download_limit"]
+        ):
+            return file_api_error("Das Downloadlimit dieser Freigabe ist erreicht.", 410)
+
         _, target = resolve_stored_file(row["root_path"], row["relative_path"])
         if not target.exists() or not target.is_file():
             return file_api_error("Die freigegebene Datei wurde nicht gefunden.", 404)
+
+        with auth_connection() as connection:
+            connection.execute(
+                "UPDATE file_shares SET download_count = download_count + 1 WHERE token_hash = ?",
+                (hashlib.sha256(token.encode("utf-8")).hexdigest(),),
+            )
 
         return send_file(
             target,
@@ -2634,6 +3075,642 @@ def api_files_share_download(token):
         )
     except (OSError, RuntimeError, ValueError) as exc:
         return file_api_error(str(exc), 409)
+
+
+@app.get("/api/auth/sessions")
+@authentication_required()
+def api_auth_sessions():
+    now = int(time.time())
+    with auth_connection() as connection:
+        connection.execute("DELETE FROM sessions WHERE expires_at <= ?", (now,))
+        rows = connection.execute(
+            """
+            SELECT token_hash, created_at, expires_at, device_name,
+                   user_agent, ip_address, COALESCE(last_seen_at, created_at) AS last_seen_at
+            FROM sessions WHERE user_id = ? ORDER BY last_seen_at DESC
+            """,
+            (current_user_id(),),
+        ).fetchall()
+    return jsonify({
+        "ok": True,
+        "sessions": [{
+            "id": row["token_hash"],
+            "current": row["token_hash"] == getattr(g, "auth_token_hash", ""),
+            "device_name": row["device_name"] or "Unbekanntes Gerät",
+            "user_agent": row["user_agent"],
+            "ip_address": row["ip_address"],
+            "created_at": row["created_at"],
+            "last_seen_at": row["last_seen_at"],
+            "expires_at": row["expires_at"],
+        } for row in rows],
+    })
+
+
+@app.post("/api/auth/sessions/revoke")
+@authentication_required()
+def api_auth_sessions_revoke():
+    session_id = str((request.get_json(silent=True) or {}).get("id") or "")
+    if len(session_id) != 64:
+        return file_api_error("Ungültige Sitzung.")
+    if session_id == getattr(g, "auth_token_hash", ""):
+        return file_api_error("Die aktuelle Sitzung wird über Abmelden beendet.", 409)
+    with auth_connection() as connection:
+        cursor = connection.execute(
+            "DELETE FROM sessions WHERE token_hash = ? AND user_id = ?",
+            (session_id, current_user_id()),
+        )
+    if cursor.rowcount == 0:
+        return file_api_error("Sitzung nicht gefunden.", 404)
+    write_audit("auth.session_revoke", session_id[:12])
+    return jsonify({"ok": True})
+
+
+@app.get("/api/audit")
+@authentication_required("users_manage")
+def api_audit_list():
+    limit = max(1, min(int(request.args.get("limit", 200)), 500))
+    with auth_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, username, action, target, details, ip_address, created_at
+            FROM audit_events ORDER BY id DESC LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return jsonify({"ok": True, "events": [dict(row) for row in rows]})
+
+
+@app.get("/api/files/favorites")
+@authentication_required("files_view")
+def api_file_favorites():
+    root, _, _ = assigned_file_root()
+    with auth_connection() as connection:
+        rows = connection.execute(
+            """SELECT relative_path, created_at FROM file_favorites
+               WHERE user_id = ? AND root_path = ? ORDER BY created_at DESC""",
+            (current_user_id(), str(root)),
+        ).fetchall()
+    items = []
+    for row in rows:
+        try:
+            _, path = resolve_stored_file(root, row["relative_path"])
+            if path.exists():
+                items.append({**describe_file(root, path), "created_at": row["created_at"]})
+        except (OSError, ValueError):
+            continue
+    return jsonify({"ok": True, "items": items})
+
+
+@app.post("/api/files/favorites/toggle")
+@authentication_required("files_view")
+def api_file_favorite_toggle():
+    payload = request.get_json(silent=True) or {}
+    root, path = resolve_file_path(payload.get("path", ""))
+    if not path.exists() or path == root:
+        return file_api_error("Datei oder Ordner nicht gefunden.", 404)
+    relative = relative_file_path(root, path)
+    with auth_connection() as connection:
+        existing = connection.execute(
+            "SELECT 1 FROM file_favorites WHERE user_id = ? AND root_path = ? AND relative_path = ?",
+            (current_user_id(), str(root), relative),
+        ).fetchone()
+        if existing:
+            connection.execute(
+                "DELETE FROM file_favorites WHERE user_id = ? AND root_path = ? AND relative_path = ?",
+                (current_user_id(), str(root), relative),
+            )
+        else:
+            connection.execute(
+                "INSERT INTO file_favorites VALUES (?, ?, ?, ?)",
+                (current_user_id(), str(root), relative, int(time.time())),
+            )
+    return jsonify({"ok": True, "favorite": existing is None})
+
+
+@app.get("/api/files/recent")
+@authentication_required("files_view")
+def api_file_recent():
+    root, _, _ = assigned_file_root()
+    with auth_connection() as connection:
+        rows = connection.execute(
+            """SELECT relative_path, opened_at FROM recent_files
+               WHERE user_id = ? AND root_path = ? ORDER BY opened_at DESC LIMIT 50""",
+            (current_user_id(), str(root)),
+        ).fetchall()
+    items = []
+    for row in rows:
+        try:
+            _, path = resolve_stored_file(root, row["relative_path"])
+            if path.exists():
+                items.append({**describe_file(root, path), "opened_at": row["opened_at"]})
+        except (OSError, ValueError):
+            continue
+    return jsonify({"ok": True, "items": items})
+
+
+@app.get("/api/files/gallery")
+@authentication_required("files_view")
+def api_files_gallery():
+    extensions = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".mp4", ".mov", ".mkv", ".webm", ".mp3", ".m4a", ".wav", ".flac"}
+    root, _, _ = assigned_file_root()
+    items = []
+    for current, directories, files in os.walk(root, followlinks=False):
+        directories[:] = [name for name in directories if name != TRASH_DIRECTORY_NAME and not name.startswith(".pi-control-")]
+        for name in files:
+            if Path(name).suffix.casefold() not in extensions:
+                continue
+            try:
+                items.append(describe_file(root, Path(current) / name))
+            except OSError:
+                continue
+            if len(items) >= 500:
+                break
+        if len(items) >= 500:
+            break
+    items.sort(key=lambda item: item["modified"], reverse=True)
+    return jsonify({"ok": True, "items": items, "limited": len(items) >= 500})
+
+
+@app.get("/api/storage-analysis")
+@authentication_required("users_manage")
+def api_storage_analysis():
+    root = require_file_root()
+    files = []
+    total = 0
+    for current, directories, names in os.walk(root, followlinks=False):
+        directories[:] = [name for name in directories if name != TRASH_DIRECTORY_NAME]
+        for name in names:
+            path = Path(current) / name
+            try:
+                size = path.stat().st_size
+                total += size
+                files.append({"path": relative_file_path(root, path), "size": size})
+            except OSError:
+                continue
+    files.sort(key=lambda item: item["size"], reverse=True)
+    size_groups = {}
+    for item in files:
+        if item["size"] > 0:
+            size_groups.setdefault(item["size"], []).append(item)
+    duplicates = []
+    checked = 0
+    for group in size_groups.values():
+        if len(group) < 2:
+            continue
+        hashes = {}
+        for item in group:
+            if checked >= 2000:
+                break
+            checked += 1
+            digest = hashlib.sha256()
+            try:
+                with (root / item["path"]).open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                hashes.setdefault(digest.hexdigest(), []).append(item)
+            except OSError:
+                continue
+        duplicates.extend(values for values in hashes.values() if len(values) > 1)
+    return jsonify({
+        "ok": True,
+        "total_bytes": total,
+        "file_count": len(files),
+        "largest": files[:50],
+        "duplicates": duplicates[:50],
+        "duplicate_scan_limited": checked >= 2000,
+    })
+
+
+@app.get("/api/network/devices")
+@authentication_required("users_manage")
+def api_network_devices():
+    code, output, error = run_command(["ip", "neigh", "show"], timeout=8)
+    if code != 0:
+        return file_api_error(error or "Netzwerkgeräte konnten nicht gelesen werden.", 500)
+    devices = []
+    for line in output.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        devices.append({
+            "ip": parts[0],
+            "mac": parts[4] if len(parts) > 4 and parts[3] == "lladdr" else "",
+            "state": parts[-1],
+        })
+    return jsonify({"ok": True, "devices": devices})
+
+
+@app.post("/api/ocr")
+@authentication_required("files_upload")
+def api_ocr_document():
+    uploaded = request.files.get("file")
+    if uploaded is None:
+        return file_api_error("Kein Dokument ausgewählt.")
+    suffix = Path(uploaded.filename or "scan.jpg").suffix.casefold()
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"}:
+        return file_api_error("OCR unterstützt JPG, PNG, WEBP und TIFF.")
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix="pi-control-ocr-", suffix=suffix, delete=False) as temporary:
+            temporary_path = Path(temporary.name)
+            uploaded.save(temporary)
+        result = subprocess.run(
+            ["tesseract", str(temporary_path), "stdout", "-l", "deu+eng"],
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+        if result.returncode != 0:
+            return file_api_error(result.stderr.strip() or "Texterkennung fehlgeschlagen.", 500)
+        text_result = result.stdout.strip()
+        write_audit("ocr.scan", uploaded.filename or "Dokument")
+        return jsonify({"ok": True, "text": text_result})
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return file_api_error(str(exc), 500)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+@app.post("/api/mobile-backup")
+@authentication_required("files_upload")
+def api_mobile_backup():
+    uploads = request.files.getlist("files")
+    if not uploads or len(uploads) > 100:
+        return file_api_error("Bitte 1 bis 100 Fotos oder Videos auswählen.")
+    try:
+        root, _, quota = assigned_file_root()
+        destination = root / "Mobile-Backups" / time.strftime("%Y-%m-%d")
+        destination.mkdir(parents=True, exist_ok=True)
+        set_file_owner(destination, directory=True)
+        used = storage_used_bytes(root)
+        saved = 0
+        for upload in uploads:
+            name = validate_file_name(upload.filename)
+            target = destination / name
+            if target.exists():
+                target = destination / f"{int(time.time())}-{secrets.token_hex(3)}-{name}"
+            upload.save(target)
+            size = target.stat().st_size
+            if quota is not None and used + size > quota:
+                target.unlink(missing_ok=True)
+                return file_api_error("Speicherlimit während der Sicherung erreicht.", 413)
+            used += size
+            saved += 1
+            set_file_owner(target)
+        write_audit("mobile.backup", relative_file_path(root, destination), {"count": saved})
+        return jsonify({"ok": True, "saved": saved, "path": relative_file_path(root, destination)})
+    except (OSError, RuntimeError, ValueError) as exc:
+        return file_api_error(str(exc), 409)
+
+
+@app.get("/api/docker/containers")
+@authentication_required("users_manage")
+def api_docker_containers():
+    code, output, error = run_command([
+        "docker", "ps", "-a", "--format",
+        "{{json .}}",
+    ], timeout=12)
+    if code != 0:
+        return jsonify({"ok": False, "installed": False, "error": error or "Docker ist nicht installiert."}), 503
+    containers = []
+    for line in output.splitlines():
+        try:
+            containers.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return jsonify({"ok": True, "installed": True, "containers": containers})
+
+
+@app.post("/api/docker/containers/action")
+@authentication_required("users_manage")
+def api_docker_container_action():
+    payload = request.get_json(silent=True) or {}
+    container = str(payload.get("container") or "").strip()
+    action = str(payload.get("action") or "").strip()
+    if action not in {"start", "stop", "restart"} or not container or len(container) > 128:
+        return file_api_error("Ungültige Docker-Aktion.")
+    code, output, error = run_command(["docker", action, container], timeout=30)
+    if code != 0:
+        return file_api_error(error or output or "Docker-Aktion fehlgeschlagen.", 500)
+    write_audit(f"docker.{action}", container)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/vaults", methods=["GET", "POST"])
+@authentication_required("files_manage")
+def api_vaults():
+    if request.method == "GET":
+        with auth_connection() as connection:
+            rows = connection.execute(
+                "SELECT id, name, mount_path, created_at FROM encrypted_vaults WHERE user_id = ? ORDER BY name",
+                (current_user_id(),),
+            ).fetchall()
+        return jsonify({"ok": True, "vaults": [{
+            "id": row["id"], "name": row["name"], "created_at": row["created_at"],
+            "unlocked": os.path.ismount(row["mount_path"]),
+        } for row in rows]})
+    payload = request.get_json(silent=True) or {}
+    try:
+        name = validate_file_name(payload.get("name"))
+        password = str(payload.get("password") or "")
+        if len(password) < 10:
+            return file_api_error("Das Tresorpasswort braucht mindestens 10 Zeichen.")
+        root, _, _ = assigned_file_root()
+        private_root = root / "Private"
+        cipher_root = root / VAULTS_DIRECTORY_NAME
+        private_root.mkdir(exist_ok=True)
+        cipher_root.mkdir(mode=0o700, exist_ok=True)
+        mount_path = private_root / name
+        cipher_path = cipher_root / f"{current_user_id()}-{secrets.token_hex(10)}"
+        if mount_path.exists():
+            return file_api_error("Dieser Tresorname ist bereits vergeben.", 409)
+        mount_path.mkdir()
+        cipher_path.mkdir(mode=0o700)
+        result = subprocess.run(
+            ["gocryptfs", "-q", "-init", "-passfile", "/dev/stdin", str(cipher_path)],
+            input=password + "\n", capture_output=True, text=True, timeout=30, check=False,
+        )
+        if result.returncode != 0:
+            shutil.rmtree(mount_path, ignore_errors=True)
+            shutil.rmtree(cipher_path, ignore_errors=True)
+            return file_api_error(result.stderr.strip() or "Tresor konnte nicht erstellt werden.", 500)
+        with auth_connection() as connection:
+            cursor = connection.execute(
+                """INSERT INTO encrypted_vaults
+                   (user_id, name, root_path, cipher_path, mount_path, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (current_user_id(), name, str(root), str(cipher_path), str(mount_path), int(time.time())),
+            )
+        write_audit("vault.create", name)
+        return jsonify({"ok": True, "id": cursor.lastrowid})
+    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
+        return file_api_error(str(exc), 409)
+
+
+def current_vault(vault_id):
+    with auth_connection() as connection:
+        return connection.execute(
+            "SELECT * FROM encrypted_vaults WHERE id = ? AND user_id = ?",
+            (vault_id, current_user_id()),
+        ).fetchone()
+
+
+@app.post("/api/vaults/<int:vault_id>/unlock")
+@authentication_required("files_manage")
+def api_vault_unlock(vault_id):
+    vault = current_vault(vault_id)
+    if vault is None:
+        return file_api_error("Tresor nicht gefunden.", 404)
+    password = str((request.get_json(silent=True) or {}).get("password") or "")
+    if os.path.ismount(vault["mount_path"]):
+        return jsonify({"ok": True, "unlocked": True})
+    result = subprocess.run(
+        ["gocryptfs", "-q", "-passfile", "/dev/stdin", vault["cipher_path"], vault["mount_path"]],
+        input=password + "\n", capture_output=True, text=True, timeout=30, check=False,
+    )
+    if result.returncode != 0:
+        return file_api_error("Tresorpasswort ist falsch oder der Tresor konnte nicht geöffnet werden.", 401)
+    write_audit("vault.unlock", vault["name"])
+    return jsonify({"ok": True, "unlocked": True})
+
+
+@app.post("/api/vaults/<int:vault_id>/lock")
+@authentication_required("files_manage")
+def api_vault_lock(vault_id):
+    vault = current_vault(vault_id)
+    if vault is None:
+        return file_api_error("Tresor nicht gefunden.", 404)
+    if os.path.ismount(vault["mount_path"]):
+        result = subprocess.run(["fusermount3", "-u", vault["mount_path"]], capture_output=True, text=True, timeout=15, check=False)
+        if result.returncode != 0:
+            return file_api_error(result.stderr.strip() or "Tresor konnte nicht gesperrt werden.", 500)
+    write_audit("vault.lock", vault["name"])
+    return jsonify({"ok": True, "unlocked": False})
+
+
+@app.route("/api/playlists", methods=["GET", "POST"])
+@authentication_required("files_view")
+def api_playlists():
+    if request.method == "POST":
+        name = str((request.get_json(silent=True) or {}).get("name") or "").strip()[:120]
+        if not name:
+            return file_api_error("Bitte einen Namen eingeben.")
+        with auth_connection() as connection:
+            cursor = connection.execute(
+                "INSERT INTO playlists (user_id, name, created_at) VALUES (?, ?, ?)",
+                (current_user_id(), name, int(time.time())),
+            )
+        return jsonify({"ok": True, "id": cursor.lastrowid})
+    with auth_connection() as connection:
+        rows = connection.execute(
+            """SELECT playlists.*, COUNT(playlist_items.playlist_id) AS item_count
+               FROM playlists LEFT JOIN playlist_items ON playlist_items.playlist_id = playlists.id
+               WHERE playlists.user_id = ? GROUP BY playlists.id ORDER BY playlists.name""",
+            (current_user_id(),),
+        ).fetchall()
+    return jsonify({"ok": True, "playlists": [dict(row) for row in rows]})
+
+
+@app.post("/api/playlists/<int:playlist_id>/items")
+@authentication_required("files_view")
+def api_playlist_add_item(playlist_id):
+    payload = request.get_json(silent=True) or {}
+    root, target = resolve_file_path(payload.get("path", ""))
+    if not target.is_file():
+        return file_api_error("Mediendatei nicht gefunden.", 404)
+    with auth_connection() as connection:
+        playlist = connection.execute(
+            "SELECT id FROM playlists WHERE id = ? AND user_id = ?",
+            (playlist_id, current_user_id()),
+        ).fetchone()
+        if playlist is None:
+            return file_api_error("Wiedergabeliste nicht gefunden.", 404)
+        position = connection.execute(
+            "SELECT COALESCE(MAX(position), -1) + 1 AS position FROM playlist_items WHERE playlist_id = ?",
+            (playlist_id,),
+        ).fetchone()["position"]
+        connection.execute(
+            "INSERT OR IGNORE INTO playlist_items VALUES (?, ?, ?, ?)",
+            (playlist_id, str(root), relative_file_path(root, target), position),
+        )
+    return jsonify({"ok": True})
+
+
+@app.get("/api/playlists/<int:playlist_id>/items")
+@authentication_required("files_view")
+def api_playlist_items(playlist_id):
+    with auth_connection() as connection:
+        playlist = connection.execute(
+            "SELECT id, name FROM playlists WHERE id = ? AND user_id = ?",
+            (playlist_id, current_user_id()),
+        ).fetchone()
+        if playlist is None:
+            return file_api_error("Wiedergabeliste nicht gefunden.", 404)
+        rows = connection.execute(
+            "SELECT root_path, relative_path, position FROM playlist_items WHERE playlist_id = ? ORDER BY position",
+            (playlist_id,),
+        ).fetchall()
+    items = []
+    for row in rows:
+        try:
+            root, target = resolve_stored_file(row["root_path"], row["relative_path"])
+            if target.is_file():
+                items.append({**describe_file(root, target), "position": row["position"]})
+        except (OSError, ValueError):
+            continue
+    return jsonify({"ok": True, "name": playlist["name"], "items": items})
+
+
+@app.route("/api/personal-items", methods=["GET", "POST"])
+@authentication_required("dashboard_view")
+def api_personal_items():
+    if request.method == "GET":
+        with auth_connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM personal_items WHERE user_id = ? ORDER BY updated_at DESC",
+                (current_user_id(),),
+            ).fetchall()
+        return jsonify({"ok": True, "items": [dict(row) for row in rows]})
+    payload = request.get_json(silent=True) or {}
+    kind = str(payload.get("kind") or "note")
+    if kind not in {"note", "task", "shopping"}:
+        return file_api_error("Ungültiger Eintragstyp.")
+    title = str(payload.get("title") or "").strip()[:160]
+    if not title:
+        return file_api_error("Bitte einen Titel eingeben.")
+    now = int(time.time())
+    with auth_connection() as connection:
+        cursor = connection.execute(
+            """INSERT INTO personal_items
+               (user_id, kind, title, content, completed, created_at, updated_at)
+               VALUES (?, ?, ?, ?, 0, ?, ?)""",
+            (current_user_id(), kind, title, str(payload.get("content") or "")[:10000], now, now),
+        )
+    return jsonify({"ok": True, "id": cursor.lastrowid})
+
+
+@app.route("/api/scheduled-tasks", methods=["GET", "POST"])
+@authentication_required("users_manage")
+def api_scheduled_tasks():
+    if request.method == "GET":
+        with auth_connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM scheduled_tasks ORDER BY schedule, name"
+            ).fetchall()
+        return jsonify({"ok": True, "tasks": [dict(row) for row in rows]})
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get("name") or "").strip()[:120]
+    schedule = str(payload.get("schedule") or "").strip()
+    action = str(payload.get("action") or "").strip()
+    if not name or len(schedule) != 5 or schedule[2] != ":":
+        return file_api_error("Name und Uhrzeit im Format HH:MM sind erforderlich.")
+    try:
+        hour, minute = (int(value) for value in schedule.split(":"))
+        if hour not in range(24) or minute not in range(60):
+            raise ValueError
+    except ValueError:
+        return file_api_error("Ungültige Uhrzeit.")
+    if action not in {"backup", "reboot", "restart_samba", "restart_ngrok"}:
+        return file_api_error("Ungültige geplante Aktion.")
+    with auth_connection() as connection:
+        cursor = connection.execute(
+            """INSERT INTO scheduled_tasks
+               (user_id, name, schedule, action, enabled, created_at)
+               VALUES (?, ?, ?, ?, 1, ?)""",
+            (current_user_id(), name, schedule, action, int(time.time())),
+        )
+    write_audit("schedule.create", name, {"schedule": schedule, "action": action})
+    return jsonify({"ok": True, "id": cursor.lastrowid})
+
+
+@app.delete("/api/scheduled-tasks/<int:task_id>")
+@authentication_required("users_manage")
+def api_scheduled_task_delete(task_id):
+    with auth_connection() as connection:
+        cursor = connection.execute("DELETE FROM scheduled_tasks WHERE id = ?", (task_id,))
+    if cursor.rowcount == 0:
+        return file_api_error("Aufgabe nicht gefunden.", 404)
+    write_audit("schedule.delete", str(task_id))
+    return jsonify({"ok": True})
+
+
+@app.patch("/api/personal-items/<int:item_id>")
+@authentication_required("dashboard_view")
+def api_personal_item_update(item_id):
+    payload = request.get_json(silent=True) or {}
+    with auth_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM personal_items WHERE id = ? AND user_id = ?",
+            (item_id, current_user_id()),
+        ).fetchone()
+        if row is None:
+            return file_api_error("Eintrag nicht gefunden.", 404)
+        connection.execute(
+            """UPDATE personal_items SET title = ?, content = ?, completed = ?, updated_at = ?
+               WHERE id = ? AND user_id = ?""",
+            (
+                str(payload.get("title", row["title"]))[:160],
+                str(payload.get("content", row["content"]))[:10000],
+                int(bool(payload.get("completed", row["completed"]))),
+                int(time.time()), item_id, current_user_id(),
+            ),
+        )
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/personal-items/<int:item_id>")
+@authentication_required("dashboard_view")
+def api_personal_item_delete(item_id):
+    with auth_connection() as connection:
+        cursor = connection.execute(
+            "DELETE FROM personal_items WHERE id = ? AND user_id = ?",
+            (item_id, current_user_id()),
+        )
+    if cursor.rowcount == 0:
+        return file_api_error("Eintrag nicht gefunden.", 404)
+    return jsonify({"ok": True})
+
+
+@app.get("/api/global-search")
+@authentication_required("dashboard_view")
+def api_global_search():
+    query = str(request.args.get("q") or "").strip().casefold()
+    if len(query) < 2:
+        return file_api_error("Bitte mindestens zwei Zeichen eingeben.")
+    results = []
+    if "files_view" in g.auth_permissions:
+        root, _, _ = assigned_file_root()
+        visited = 0
+        for current, directories, files in os.walk(root, followlinks=False):
+            directories[:] = [name for name in directories if name != TRASH_DIRECTORY_NAME]
+            for name in [*directories, *files]:
+                visited += 1
+                if query in name.casefold():
+                    path = Path(current) / name
+                    results.append({"type": "file", "title": name, "subtitle": relative_file_path(root, path)})
+                if len(results) >= 50 or visited >= SEARCH_VISIT_LIMIT:
+                    break
+            if len(results) >= 50 or visited >= SEARCH_VISIT_LIMIT:
+                break
+    with auth_connection() as connection:
+        items = connection.execute(
+            """SELECT id, kind, title, content FROM personal_items
+               WHERE user_id = ? AND (LOWER(title) LIKE ? OR LOWER(content) LIKE ?)
+               LIMIT 30""",
+            (current_user_id(), f"%{query}%", f"%{query}%"),
+        ).fetchall()
+        for item in items:
+            results.append({"type": item["kind"], "title": item["title"], "subtitle": item["content"][:160]})
+        if bool(g.auth_user["is_admin"]):
+            users = connection.execute(
+                "SELECT username, display_name FROM users WHERE LOWER(username) LIKE ? OR LOWER(display_name) LIKE ? LIMIT 20",
+                (f"%{query}%", f"%{query}%"),
+            ).fetchall()
+            for user in users:
+                results.append({"type": "user", "title": user["display_name"], "subtitle": f"@{user['username']}"})
+    return jsonify({"ok": True, "results": results[:100]})
 
 
 @app.get("/api/info")
@@ -2717,13 +3794,53 @@ def api_backups_create():
             check=False,
         )
         if result.returncode != 0:
+            send_ntfy(
+                "Pi Control: Backup fehlgeschlagen",
+                result.stderr.strip() or "Backup konnte nicht erstellt werden.",
+                priority="high",
+                tags="warning",
+            )
             return file_api_error(
                 result.stderr.strip() or "Backup konnte nicht erstellt werden.",
                 500,
             )
-        return jsonify({"ok": True, "name": result.stdout.strip()})
+        name = result.stdout.strip()
+        send_ntfy("Pi Control: Backup erstellt", name, tags="floppy_disk")
+        write_audit("backup.create", name)
+        return jsonify({"ok": True, "name": name})
     except (OSError, subprocess.TimeoutExpired) as exc:
         return file_api_error(str(exc), 500)
+
+
+@app.post("/api/backups/restore")
+@authentication_required("users_manage")
+def api_backups_restore():
+    denied = require_admin_account()
+    if denied is not None:
+        return denied
+    name = str((request.get_json(silent=True) or {}).get("name") or "")
+    if not name.startswith("pi-control-") or not name.endswith(".tar.gz") or "/" in name or "\\" in name:
+        return file_api_error("Ungültiger Backup-Name.")
+    archive = (BACKUP_DIRECTORY / name).resolve(strict=False)
+    try:
+        archive.relative_to(BACKUP_DIRECTORY.resolve(strict=True))
+    except (OSError, ValueError):
+        return file_api_error("Ungültiger Backup-Pfad.")
+    if not archive.is_file():
+        return file_api_error("Backup nicht gefunden.", 404)
+    unit = f"pi-control-restore-{int(time.time())}"
+    result = subprocess.run(
+        ["systemd-run", f"--unit={unit}", "--on-active=2s", str(BASE_DIR / "restore.sh"), str(archive)],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    if result.returncode != 0:
+        return file_api_error(result.stderr.strip() or "Wiederherstellung konnte nicht gestartet werden.", 500)
+    write_audit("backup.restore", name)
+    send_ntfy("Pi Control: Wiederherstellung gestartet", f"Backup {name} wird wiederhergestellt.", tags="arrows_counterclockwise")
+    return jsonify({"ok": True, "restarting": True})
 
 
 @app.post("/api/terminal/execute")

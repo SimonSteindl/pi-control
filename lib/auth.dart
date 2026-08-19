@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiException implements Exception {
   final String message;
@@ -68,6 +69,53 @@ class PiApiClient {
   String activeBase = candidates.first;
   String? token;
 
+  Future<void> initialize() async {
+    final preferences = await SharedPreferences.getInstance();
+    final saved = preferences.getStringList('pi_control_servers') ?? const [];
+    for (final base in saved) {
+      if (!candidates.contains(base)) candidates.add(base);
+    }
+    final preferred = preferences.getString('pi_control_active_server');
+    if (preferred != null && candidates.contains(preferred)) {
+      activeBase = preferred;
+    }
+  }
+
+  Future<void> addServer(String address) async {
+    var value = address.trim();
+    if (!value.startsWith('http://') && !value.startsWith('https://')) {
+      value = 'https://$value';
+    }
+    value = value.replaceAll(RegExp(r'/+$'), '');
+    if (!value.endsWith('/api')) value = '$value/api';
+    final uri = Uri.parse(value);
+    if (!uri.hasAuthority) throw const ApiException('Ungültige Serveradresse.');
+    if (!candidates.contains(value)) candidates.add(value);
+    activeBase = value;
+    token = null;
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setStringList(
+      'pi_control_servers',
+      candidates
+          .where(
+            (base) =>
+                !base.contains('192.168.0.123') &&
+                !base.contains('100.73.19.27') &&
+                !(kIsWeb && base == '${Uri.base.origin}/api'),
+          )
+          .toList(),
+    );
+    await preferences.setString('pi_control_active_server', value);
+  }
+
+  Future<void> selectServer(String base) async {
+    if (!candidates.contains(base)) return;
+    activeBase = base;
+    token = null;
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString('pi_control_active_server', base);
+  }
+
   String get connectionName {
     if (kIsWeb && activeBase == '${Uri.base.origin}/api') return 'Website';
     if (activeBase.contains('100.73.19.27')) return 'Tailscale';
@@ -108,6 +156,10 @@ class PiApiClient {
         } else if (method == 'PATCH') {
           response = await http
               .patch(uri, headers: mergedHeaders, body: body)
+              .timeout(timeout);
+        } else if (method == 'DELETE') {
+          response = await http
+              .delete(uri, headers: mergedHeaders, body: body)
               .timeout(timeout);
         } else {
           throw UnsupportedError('Unbekannte HTTP-Methode: $method');
@@ -161,6 +213,21 @@ class PiApiClient {
     );
   }
 
+  Future<http.Response> delete(
+    String path, {
+    Map<String, String>? headers,
+    Object? body,
+    Duration timeout = const Duration(seconds: 10),
+  }) {
+    return _request(
+      'DELETE',
+      path,
+      headers: headers,
+      body: body,
+      timeout: timeout,
+    );
+  }
+
   Map<String, dynamic> decodeObject(http.Response response) {
     try {
       final decoded = jsonDecode(response.body);
@@ -194,6 +261,16 @@ class PiApiClient {
         'password': password,
         'remember_me': rememberMe,
         'cookie_only': kIsWeb,
+        'device_name': kIsWeb
+            ? 'Webbrowser'
+            : switch (defaultTargetPlatform) {
+                TargetPlatform.android => 'Android-Gerät',
+                TargetPlatform.iOS => 'iPhone oder iPad',
+                TargetPlatform.windows => 'Windows-PC',
+                TargetPlatform.macOS => 'Mac',
+                TargetPlatform.linux => 'Linux-Gerät',
+                TargetPlatform.fuchsia => 'Mobilgerät',
+              },
       }),
     );
 

@@ -6,3 +6,4 @@ After=local-fs.target
 Type=oneshot
 ExecStart=/home/stoney22/pi-control/backup.sh
 User=root
+Environment=NTFY_TOPIC=Stoney22

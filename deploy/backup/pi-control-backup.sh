@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+notify() {
+    if [[ -n "${NTFY_TOPIC:-}" ]]; then
+        curl -fsS -m 8 -H "Title: $1" -H "Tags: $3" -d "$2" "https://ntfy.sh/$NTFY_TOPIC" >/dev/null || true
+    fi
+}
+trap 'notify "Pi Control: Backup fehlgeschlagen" "Das automatische Backup konnte nicht erstellt werden." "warning"' ERR
+
 base_dir=/home/stoney22/pi-control
 backup_dir=/mnt/pishare/Backups/Pi-Control
 auth_db="$base_dir/auth.db"
@@ -38,3 +45,4 @@ chmod 0600 "$backup_dir/$archive_name"
 
 find "$backup_dir" -maxdepth 1 -type f -name 'pi-control-*.tar.gz' -mtime +14 -delete
 printf '%s\n' "$archive_name"
+notify "Pi Control: Backup erstellt" "$archive_name" "floppy_disk"

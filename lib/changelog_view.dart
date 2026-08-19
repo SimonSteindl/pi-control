@@ -12,6 +12,20 @@ class _ChangelogDialog extends StatelessWidget {
 
   static const entries = [
     _ChangelogEntry(
+      version: '2.0.0',
+      date: '19. August 2026',
+      title: 'Deine private Pi-Cloud',
+      highlights: [
+        'Galerie, Wiedergabelisten, Handy-Mediensicherung, Dokumentenscanner und OCR.',
+        'Dateiversionen, Favoriten, Verlauf, ZIP-Werkzeuge und geschützte Freigabelinks mit QR-Code.',
+        'Verschlüsselte Tresore, Speicheranalyse, globale Suche und Offline-Dashboard.',
+        'Sitzungsverwaltung, Audit-Protokoll, geplante Aufgaben, LAN- und Docker-Verwaltung.',
+        'Notizen, Aufgaben und Einkaufslisten sowie mehrere Raspberry-Pi-Verbindungen.',
+        'Anpassbare Startseite und Sprachumschaltung zwischen Deutsch und Englisch.',
+        'Backups können jetzt direkt im Admin-Bereich wiederhergestellt werden.',
+      ],
+    ),
+    _ChangelogEntry(
       version: '1.5.1',
       date: '18. August 2026',
       title: 'Schöner Wartungsmodus',

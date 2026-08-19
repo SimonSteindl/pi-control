@@ -3,7 +3,9 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'changelog_view.dart';
 import 'backup_view.dart';
@@ -12,6 +14,7 @@ import 'package:http/http.dart' as http;
 
 import 'auth.dart';
 import 'file_manager_view.dart';
+import 'feature_hub_view.dart';
 import 'login_views.dart';
 import 'terminal_view.dart';
 import 'user_admin_view.dart';
@@ -33,16 +36,31 @@ class _PiControlAppState extends State<PiControlApp> {
   final PiApiClient client = PiApiClient();
   AuthSession? session;
   bool restoringSession = true;
+  Locale appLocale = const Locale('de');
 
   @override
   void initState() {
     super.initState();
     restoreSession();
+    loadLanguage();
+  }
+
+  Future<void> loadLanguage() async {
+    final preferences = await SharedPreferences.getInstance();
+    final code = preferences.getString('pi_control_language') ?? 'de';
+    if (mounted) setState(() => appLocale = Locale(code));
+  }
+
+  Future<void> changeLanguage(Locale locale) async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString('pi_control_language', locale.languageCode);
+    if (mounted) setState(() => appLocale = locale);
   }
 
   Future<void> restoreSession() async {
     AuthSession? restored;
     try {
+      await client.initialize();
       restored = await client.restoreSession();
     } catch (_) {
       // Bei Netzwerkfehlern wird der normale Login angezeigt.
@@ -74,6 +92,9 @@ class _PiControlAppState extends State<PiControlApp> {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Pi Control',
+      locale: appLocale,
+      supportedLocales: const [Locale('de'), Locale('en')],
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
           seedColor: accentColor,
@@ -137,6 +158,7 @@ class _PiControlAppState extends State<PiControlApp> {
                 });
               },
               onLogout: logout,
+              onLanguageChanged: changeLanguage,
             ),
     );
   }
@@ -171,6 +193,7 @@ class DashboardPage extends StatefulWidget {
   final AuthSession session;
   final ValueChanged<AuthSession> onSessionUpdated;
   final VoidCallback onLogout;
+  final ValueChanged<Locale> onLanguageChanged;
 
   const DashboardPage({
     super.key,
@@ -180,6 +203,7 @@ class DashboardPage extends StatefulWidget {
     required this.session,
     required this.onSessionUpdated,
     required this.onLogout,
+    required this.onLanguageChanged,
   });
 
   @override
@@ -211,8 +235,9 @@ class _DashboardPageState extends State<DashboardPage> {
   bool showUpdateNotice = true;
   String? availableAppVersion;
   String? androidUpdatePath;
+  List<String> dashboardShortcuts = ['files', 'more', 'backups', 'search'];
 
-  static const clientAppVersion = '1.5.1';
+  static const clientAppVersion = '2.0.0';
 
   Future<http.Response> _apiGet(
     String path, {
@@ -248,6 +273,8 @@ class _DashboardPageState extends State<DashboardPage> {
   void initState() {
     super.initState();
     checkAppVersion();
+    loadCachedDashboard();
+    loadDashboardLayout();
     if (widget.session.can('dashboard_view')) {
       loadAll();
 
@@ -293,6 +320,84 @@ class _DashboardPageState extends State<DashboardPage> {
     await launchUrl(url, mode: LaunchMode.platformDefault);
   }
 
+  Future<void> showGlobalSearch() async {
+    final controller = TextEditingController();
+    var results = <Map<String, dynamic>>[];
+    var searching = false;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          Future<void> search() async {
+            if (controller.text.trim().length < 2) return;
+            setDialogState(() => searching = true);
+            final response = await _apiGet(
+              'global-search?q=${Uri.encodeQueryComponent(controller.text.trim())}',
+              timeout: const Duration(seconds: 30),
+            );
+            final raw = widget.client.decodeObject(response)['results'];
+            setDialogState(() {
+              results = raw is List
+                  ? raw
+                        .whereType<Map>()
+                        .map((item) => Map<String, dynamic>.from(item))
+                        .toList()
+                  : [];
+              searching = false;
+            });
+          }
+
+          return Dialog(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 720, maxHeight: 720),
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: TextField(
+                      controller: controller,
+                      autofocus: true,
+                      onSubmitted: (_) => search(),
+                      decoration: InputDecoration(
+                        labelText: 'Alles durchsuchen',
+                        prefixIcon: const Icon(Icons.search_rounded),
+                        suffixIcon: IconButton(
+                          onPressed: search,
+                          icon: const Icon(Icons.arrow_forward_rounded),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (searching) const LinearProgressIndicator(),
+                  Expanded(
+                    child: results.isEmpty
+                        ? const Center(
+                            child: Text('Dateien, Notizen und Benutzer finden'),
+                          )
+                        : ListView.builder(
+                            itemCount: results.length,
+                            itemBuilder: (context, index) {
+                              final item = results[index];
+                              return ListTile(
+                                leading: const Icon(Icons.search_rounded),
+                                title: Text(item['title']?.toString() ?? ''),
+                                subtitle: Text(
+                                  item['subtitle']?.toString() ?? '',
+                                ),
+                                trailing: Text(item['type']?.toString() ?? ''),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   @override
   void dispose() {
     refreshTimer?.cancel();
@@ -302,6 +407,75 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Future<void> loadAll() async {
     await Future.wait([loadData(), loadHistory(), loadBenchmarkHistory()]);
+  }
+
+  Future<void> loadCachedDashboard() async {
+    final preferences = await SharedPreferences.getInstance();
+    final cached = preferences.getString('pi_control_cached_dashboard');
+    if (cached == null || !mounted || data != null) return;
+    try {
+      final decoded = jsonDecode(cached);
+      if (decoded is Map) {
+        setState(() {
+          data = Map<String, dynamic>.from(decoded);
+          loading = false;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> loadDashboardLayout() async {
+    final preferences = await SharedPreferences.getInstance();
+    final saved = preferences.getStringList('pi_control_dashboard_shortcuts');
+    if (saved != null && saved.isNotEmpty && mounted) {
+      setState(() => dashboardShortcuts = saved);
+    }
+  }
+
+  Future<void> customizeDashboard() async {
+    final working = List<String>.from(dashboardShortcuts);
+    final saved = await showDialog<List<String>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Dashboard anordnen'),
+          content: SizedBox(
+            width: 440,
+            height: 360,
+            child: ReorderableListView(
+              onReorderItem: (oldIndex, newIndex) {
+                setDialogState(() {
+                  working.insert(newIndex, working.removeAt(oldIndex));
+                });
+              },
+              children: [
+                for (final key in working)
+                  ListTile(
+                    key: ValueKey(key),
+                    leading: const Icon(Icons.drag_handle_rounded),
+                    title: Text(switch (key) {
+                      'files' => 'Dateien',
+                      'more' => 'Medien und Werkzeuge',
+                      'backups' => 'Backups',
+                      _ => 'Globale Suche',
+                    }),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context, working),
+              child: const Text('Speichern'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved == null) return;
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setStringList('pi_control_dashboard_shortcuts', saved);
+    if (mounted) setState(() => dashboardShortcuts = saved);
   }
 
   Future<void> loadData() async {
@@ -333,6 +507,12 @@ class _DashboardPageState extends State<DashboardPage> {
       }
 
       final result = Map<String, dynamic>.from(decoded);
+
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString(
+        'pi_control_cached_dashboard',
+        jsonEncode(result),
+      );
 
       if (!mounted) return;
 
@@ -890,6 +1070,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
   @override
   Widget build(BuildContext context) {
+    final english = Localizations.localeOf(context).languageCode == 'en';
     final cpu = data?['cpu'];
     final ram = data?['ram'];
     final sd = data?['sd'];
@@ -940,14 +1121,16 @@ class _DashboardPageState extends State<DashboardPage> {
       if (widget.session.can('files_view')) 'files',
       if (widget.session.can('terminal_access')) 'terminal',
       if (widget.session.can('users_manage')) 'users',
+      'more',
     ];
     final currentPageIndex = selectedPageIndex.clamp(0, pageKeys.length - 1);
     final currentPage = pageKeys[currentPageIndex];
     final pageTitle = switch (currentPage) {
-      'files' => 'Dateimanager',
+      'files' => english ? 'Files' : 'Dateimanager',
       'terminal' => 'Terminal',
-      'users' => 'Admin-Panel',
-      _ => 'Stoneys Raspberry Pi',
+      'users' => english ? 'Admin panel' : 'Admin-Panel',
+      'more' => english ? 'More' : 'Mehr',
+      _ => english ? "Stoney's Raspberry Pi" : 'Stoneys Raspberry Pi',
     };
 
     return Scaffold(
@@ -958,10 +1141,21 @@ class _DashboardPageState extends State<DashboardPage> {
         ),
         actions: [
           IconButton(
+            onPressed: showGlobalSearch,
+            icon: const Icon(Icons.search_rounded),
+            tooltip: 'Globale Suche',
+          ),
+          IconButton(
             onPressed: showAccentPicker,
             icon: const Icon(Icons.palette_outlined),
             tooltip: 'App-Farbe',
           ),
+          if (currentPage == 'dashboard')
+            IconButton(
+              onPressed: customizeDashboard,
+              icon: const Icon(Icons.dashboard_customize_outlined),
+              tooltip: 'Dashboard anordnen',
+            ),
           if (currentPage == 'dashboard')
             IconButton(
               onPressed: loadAll,
@@ -986,6 +1180,35 @@ class _DashboardPageState extends State<DashboardPage> {
                 showBackupManager(context, widget.client);
               } else if (action == 'password') {
                 changeOwnPassword();
+              } else if (action == 'language') {
+                showDialog<void>(
+                  context: context,
+                  builder: (context) => SimpleDialog(
+                    title: const Text('Sprache / Language'),
+                    children: [
+                      SimpleDialogOption(
+                        onPressed: () {
+                          widget.onLanguageChanged(const Locale('de'));
+                          Navigator.pop(context);
+                        },
+                        child: const ListTile(
+                          leading: Text('🇩🇪', style: TextStyle(fontSize: 24)),
+                          title: Text('Deutsch'),
+                        ),
+                      ),
+                      SimpleDialogOption(
+                        onPressed: () {
+                          widget.onLanguageChanged(const Locale('en'));
+                          Navigator.pop(context);
+                        },
+                        child: const ListTile(
+                          leading: Text('🇬🇧', style: TextStyle(fontSize: 24)),
+                          title: Text('English'),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
               } else if (action == 'logout') {
                 widget.onLogout();
               }
@@ -1021,6 +1244,14 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
               ),
               const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'language',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.language_rounded),
+                  title: Text('Sprache / Language'),
+                ),
+              ),
               const PopupMenuItem(
                 value: 'password',
                 child: ListTile(
@@ -1072,6 +1303,52 @@ class _DashboardPageState extends State<DashboardPage> {
 
                       const SizedBox(height: 12),
 
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: dashboardShortcuts.map((key) {
+                              final (icon, label) = switch (key) {
+                                'files' => (Icons.folder_rounded, 'Dateien'),
+                                'more' => (
+                                  Icons.photo_library_rounded,
+                                  'Medien & Mehr',
+                                ),
+                                'backups' => (Icons.backup_rounded, 'Backups'),
+                                _ => (Icons.search_rounded, 'Suche'),
+                              };
+                              return ActionChip(
+                                avatar: Icon(icon, size: 19),
+                                label: Text(label),
+                                onPressed: () {
+                                  if (key == 'files' &&
+                                      pageKeys.contains('files')) {
+                                    setState(
+                                      () => selectedPageIndex = pageKeys
+                                          .indexOf('files'),
+                                    );
+                                  } else if (key == 'more') {
+                                    setState(
+                                      () => selectedPageIndex = pageKeys
+                                          .indexOf('more'),
+                                    );
+                                  } else if (key == 'backups' &&
+                                      widget.session.isAdmin) {
+                                    showBackupManager(context, widget.client);
+                                  } else {
+                                    showGlobalSearch();
+                                  }
+                                },
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(height: 12),
+
                       if (availableAppVersion != null && !kIsWeb) ...[
                         Card(
                           color: Theme.of(context)
@@ -1112,7 +1389,7 @@ class _DashboardPageState extends State<DashboardPage> {
                               Icons.system_update_alt_rounded,
                             ),
                             title: const Text(
-                              'Pi Control 1.5.1 ist da',
+                              'Pi Control 2.0.0 ist da',
                               style: TextStyle(fontWeight: FontWeight.w800),
                             ),
                             subtitle: const Text(
@@ -1545,6 +1822,7 @@ class _DashboardPageState extends State<DashboardPage> {
                     onSessionUpdated: widget.onSessionUpdated,
                     accentColor: widget.accentColor,
                   ),
+                FeatureHubView(client: widget.client, session: widget.session),
               ],
             ),
       bottomNavigationBar: NavigationBar(
@@ -1555,16 +1833,16 @@ class _DashboardPageState extends State<DashboardPage> {
           });
         },
         destinations: [
-          const NavigationDestination(
-            icon: Icon(Icons.space_dashboard_outlined),
-            selectedIcon: Icon(Icons.space_dashboard_rounded),
-            label: 'Übersicht',
+          NavigationDestination(
+            icon: const Icon(Icons.space_dashboard_outlined),
+            selectedIcon: const Icon(Icons.space_dashboard_rounded),
+            label: english ? 'Overview' : 'Übersicht',
           ),
           if (widget.session.can('files_view'))
-            const NavigationDestination(
-              icon: Icon(Icons.folder_outlined),
-              selectedIcon: Icon(Icons.folder_rounded),
-              label: 'Dateien',
+            NavigationDestination(
+              icon: const Icon(Icons.folder_outlined),
+              selectedIcon: const Icon(Icons.folder_rounded),
+              label: english ? 'Files' : 'Dateien',
             ),
           if (widget.session.can('terminal_access'))
             const NavigationDestination(
@@ -1573,11 +1851,16 @@ class _DashboardPageState extends State<DashboardPage> {
               label: 'Terminal',
             ),
           if (widget.session.can('users_manage'))
-            const NavigationDestination(
-              icon: Icon(Icons.admin_panel_settings_outlined),
-              selectedIcon: Icon(Icons.admin_panel_settings_rounded),
+            NavigationDestination(
+              icon: const Icon(Icons.admin_panel_settings_outlined),
+              selectedIcon: const Icon(Icons.admin_panel_settings_rounded),
               label: 'Admin',
             ),
+          NavigationDestination(
+            icon: const Icon(Icons.apps_outlined),
+            selectedIcon: const Icon(Icons.apps_rounded),
+            label: english ? 'More' : 'Mehr',
+          ),
         ],
       ),
     );

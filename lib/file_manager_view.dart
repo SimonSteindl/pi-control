@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 typedef FileApiGet = Future<http.Response> Function(
   String path,
@@ -58,20 +59,26 @@ class _FileManagerViewState extends State<FileManagerView> {
   List<PiFileEntry> _entries = [];
   bool _loading = false;
   bool _uploading = false;
+  double _uploadProgress = 0;
+  double _uploadSpeedMbps = 0;
+  http.Client? _uploadClient;
   bool _searching = false;
   bool _showingSearch = false;
   final TextEditingController _searchController = TextEditingController();
   final Set<String> _selectedPaths = <String>{};
+  final Set<String> _favoritePaths = <String>{};
   String? _error;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _loadFavorites();
   }
 
   @override
   void dispose() {
+    _uploadClient?.close();
     _searchController.dispose();
     super.dispose();
   }
@@ -87,6 +94,107 @@ class _FileManagerViewState extends State<FileManagerView> {
     }
 
     return 'HTTP ${response.statusCode}';
+  }
+
+  Future<List<PiFileEntry>> _loadFavorites() async {
+    try {
+      final response = await widget.apiGet('files/favorites', null);
+      final decoded = jsonDecode(response.body);
+      final favorites = <PiFileEntry>[];
+      if (decoded is Map && decoded['items'] is List) {
+        for (final item in decoded['items'] as List) {
+          if (item is Map) favorites.add(PiFileEntry.fromJson(item));
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _favoritePaths
+            ..clear()
+            ..addAll(favorites.map((item) => item.path));
+        });
+      }
+      return favorites;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> _toggleFavorite(PiFileEntry entry) async {
+    final response = await _protectedPost('files/favorites/toggle', {
+      'path': entry.path,
+    });
+    if (response.statusCode == 200) await _loadFavorites();
+  }
+
+  Future<void> _openFavorites() async {
+    final favorites = await _loadFavorites();
+    await _openSavedFiles('Favoriten', favorites, 'Noch keine Favoriten.');
+  }
+
+  Future<void> _openRecent() async {
+    var recent = <PiFileEntry>[];
+    try {
+      final response = await widget.apiGet('files/recent', null);
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map && decoded['items'] is List) {
+        recent = (decoded['items'] as List)
+            .whereType<Map>()
+            .map(PiFileEntry.fromJson)
+            .toList();
+      }
+    } catch (_) {
+      // Der Dialog zeigt bei einem Verbindungsproblem einfach keine Einträge.
+    }
+    await _openSavedFiles(
+      'Zuletzt verwendet',
+      recent,
+      'Noch keine zuletzt verwendeten Dateien.',
+    );
+  }
+
+  Future<void> _openSavedFiles(
+    String title,
+    List<PiFileEntry> entries,
+    String emptyMessage,
+  ) async {
+    if (!mounted) return;
+    final selected = await showDialog<PiFileEntry>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: Text(title),
+        children: entries.isEmpty
+            ? [
+                Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(emptyMessage),
+                ),
+              ]
+            : entries
+                  .map(
+                    (entry) => SimpleDialogOption(
+                      onPressed: () => Navigator.pop(context, entry),
+                      child: ListTile(
+                        leading: Icon(
+                          entry.isDirectory
+                              ? Icons.folder_rounded
+                              : Icons.insert_drive_file_outlined,
+                        ),
+                        title: Text(entry.name),
+                        subtitle: Text(entry.path),
+                      ),
+                    ),
+                  )
+                  .toList(),
+      ),
+    );
+    if (selected == null) return;
+    if (selected.isDirectory) {
+      await _load(path: selected.path);
+    } else if (_canPreview(selected)) {
+      await _preview(selected);
+    } else {
+      await _download(selected);
+    }
   }
 
   Future<void> _load({String? path}) async {
@@ -388,10 +496,71 @@ class _FileManagerViewState extends State<FileManagerView> {
   }
 
   Future<void> _share(PiFileEntry entry) async {
+    final passwordController = TextEditingController();
+    final limitController = TextEditingController();
+    var hours = 24;
+    final configured = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Freigabelink erstellen'),
+          content: SizedBox(
+            width: 440,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<int>(
+                  initialValue: hours,
+                  decoration: const InputDecoration(labelText: 'Gültigkeit'),
+                  items: const [
+                    DropdownMenuItem(value: 1, child: Text('1 Stunde')),
+                    DropdownMenuItem(value: 24, child: Text('24 Stunden')),
+                    DropdownMenuItem(value: 72, child: Text('3 Tage')),
+                    DropdownMenuItem(value: 168, child: Text('7 Tage')),
+                  ],
+                  onChanged: (value) =>
+                      setDialogState(() => hours = value ?? 24),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: passwordController,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Passwort (optional)',
+                    helperText: 'Mindestens 6 Zeichen',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: limitController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Downloadlimit (optional)',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Abbrechen'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Erstellen'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (configured != true) return;
     try {
       final response = await _protectedPost('files/share', {
         'path': entry.path,
-        'hours': 24,
+        'hours': hours,
+        'password': passwordController.text,
+        'download_limit': int.tryParse(limitController.text),
       });
       if (response.statusCode != 200) {
         throw Exception(_responseError(response));
@@ -410,8 +579,15 @@ class _FileManagerViewState extends State<FileManagerView> {
         builder: (context) => AlertDialog(
           icon: const Icon(Icons.link_rounded),
           title: const Text('Freigabelink kopiert'),
-          content: SelectableText(
-            '$link\n\nDer Link ist 24 Stunden gültig und funktioniert ohne Anmeldung.',
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(width: 190, height: 190, child: QrImageView(data: link)),
+              const SizedBox(height: 16),
+              SelectableText(
+                '$link\n\nDer Link ist $hours Stunden gültig${passwordController.text.isEmpty ? ' und funktioniert ohne Anmeldung.' : ' und mit einem Passwort geschützt.'}',
+              ),
+            ],
           ),
           actions: [
             FilledButton(
@@ -441,6 +617,18 @@ class _FileManagerViewState extends State<FileManagerView> {
       builder: (context) =>
           _ShareManagerDialog(apiGet: widget.apiGet, post: _protectedPost),
     );
+  }
+
+  Future<void> _openVersions(PiFileEntry entry) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _VersionsDialog(
+        entry: entry,
+        apiGet: widget.apiGet,
+        post: _protectedPost,
+      ),
+    );
+    await _load();
   }
 
   void _toggleSelection(PiFileEntry entry) {
@@ -521,6 +709,32 @@ class _FileManagerViewState extends State<FileManagerView> {
     await _load();
   }
 
+  Future<void> _bulkArchive() async {
+    final name = await _askForText(
+      title: 'ZIP-Archiv erstellen',
+      label: 'Dateiname',
+      confirmText: 'Erstellen',
+      initialValue: 'Archiv.zip',
+    );
+    if (name == null) return;
+    await _runFileAction(
+      () => _protectedPost('files/archive', {
+        'paths': _selectedPaths.toList(),
+        'destination': _path,
+        'name': name,
+      }, timeout: const Duration(minutes: 5)),
+      success: 'ZIP-Archiv wurde erstellt.',
+    );
+    if (mounted) setState(() => _selectedPaths.clear());
+  }
+
+  Future<void> _extract(PiFileEntry entry) => _runFileAction(
+    () => _protectedPost('files/extract', {
+      'path': entry.path,
+    }, timeout: const Duration(minutes: 5)),
+    success: '„${entry.name}“ wurde entpackt.',
+  );
+
   Future<void> _dropIntoFolder(PiFileEntry source, PiFileEntry folder) async {
     if (source.path == folder.path) return;
     await _runFileAction(
@@ -558,31 +772,44 @@ class _FileManagerViewState extends State<FileManagerView> {
 
     setState(() {
       _uploading = true;
+      _uploadProgress = 0;
+      _uploadSpeedMbps = 0;
     });
 
     try {
-      final request = http.MultipartRequest(
-        'POST',
-        Uri.parse('${widget.apiBase()}/files/upload'),
-      );
-
-      request.headers['Authorization'] = 'Bearer ${widget.authToken}';
-      request.fields['path'] = _path;
-
-      request.files.add(
-        http.MultipartFile(
-          'file',
-          file.readAsByteStream(),
-          await file.length(),
-          filename: file.name,
-        ),
-      );
-
-      final streamed = await request.send().timeout(const Duration(minutes: 5));
-      final response = await http.Response.fromStream(streamed);
-
-      if (response.statusCode != 200) {
-        throw Exception(_responseError(response));
+      var replace = false;
+      while (true) {
+        final response = await _sendUploadAttempt(file, replace: replace);
+        if (response.statusCode == 409 && !replace && mounted) {
+          final confirmed = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Datei ersetzen?'),
+              content: const Text(
+                'Die vorhandene Datei wird als ältere Version aufbewahrt.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Abbrechen'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Ersetzen'),
+                ),
+              ],
+            ),
+          );
+          if (confirmed == true) {
+            replace = true;
+            continue;
+          }
+          return;
+        }
+        if (response.statusCode != 200) {
+          throw Exception(_responseError(response));
+        }
+        break;
       }
 
       _showMessage('„${file.name}“ wurde hochgeladen.');
@@ -593,9 +820,62 @@ class _FileManagerViewState extends State<FileManagerView> {
       if (mounted) {
         setState(() {
           _uploading = false;
+          _uploadProgress = 0;
+          _uploadSpeedMbps = 0;
+          _uploadClient?.close();
+          _uploadClient = null;
         });
       }
     }
+  }
+
+  Future<http.Response> _sendUploadAttempt(
+    PlatformFile file, {
+    required bool replace,
+  }) async {
+    final fileLength = await file.length();
+    var uploadedBytes = 0;
+    final stopwatch = Stopwatch()..start();
+    var lastUpdate = Duration.zero;
+    Stream<List<int>> progressStream() async* {
+      await for (final chunk in file.readAsByteStream()) {
+        uploadedBytes += chunk.length;
+        final elapsed = stopwatch.elapsed;
+        if (elapsed - lastUpdate > const Duration(milliseconds: 120) &&
+            mounted) {
+          lastUpdate = elapsed;
+          setState(() {
+            _uploadProgress = fileLength == 0 ? 1 : uploadedBytes / fileLength;
+            _uploadSpeedMbps = elapsed.inMilliseconds == 0
+                ? 0
+                : uploadedBytes / 1024 / 1024 / (elapsed.inMilliseconds / 1000);
+          });
+        }
+        yield chunk;
+      }
+    }
+
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('${widget.apiBase()}/files/upload'),
+    );
+    request.headers['Authorization'] = 'Bearer ${widget.authToken}';
+    request.fields['path'] = _path;
+    request.fields['replace'] = replace.toString();
+    request.files.add(
+      http.MultipartFile(
+        'file',
+        progressStream(),
+        fileLength,
+        filename: file.name,
+      ),
+    );
+    _uploadClient?.close();
+    _uploadClient = http.Client();
+    final streamed = await _uploadClient!
+        .send(request)
+        .timeout(const Duration(minutes: 5));
+    return http.Response.fromStream(streamed);
   }
 
   Future<void> _download(PiFileEntry entry) async {
@@ -977,6 +1257,15 @@ class _FileManagerViewState extends State<FileManagerView> {
                             _uploading ? 'Wird hochgeladen …' : 'Hochladen',
                           ),
                         ),
+                      if (_uploading)
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            _uploadClient?.close();
+                            setState(() => _uploading = false);
+                          },
+                          icon: const Icon(Icons.close_rounded),
+                          label: const Text('Abbrechen'),
+                        ),
                       if (widget.canManage)
                         OutlinedButton.icon(
                           onPressed: _createFolder,
@@ -994,6 +1283,16 @@ class _FileManagerViewState extends State<FileManagerView> {
                         icon: const Icon(Icons.link_rounded),
                         label: const Text('Freigaben'),
                       ),
+                      OutlinedButton.icon(
+                        onPressed: _openFavorites,
+                        icon: const Icon(Icons.star_outline_rounded),
+                        label: const Text('Favoriten'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _openRecent,
+                        icon: const Icon(Icons.history_rounded),
+                        label: const Text('Zuletzt'),
+                      ),
                       if (_parentPath != null)
                         OutlinedButton.icon(
                           onPressed: () => _load(path: _parentPath),
@@ -1002,6 +1301,19 @@ class _FileManagerViewState extends State<FileManagerView> {
                         ),
                     ],
                   ),
+                  if (_uploading) ...[
+                    const SizedBox(height: 10),
+                    LinearProgressIndicator(
+                      value: _uploadProgress.clamp(0, 1),
+                      minHeight: 8,
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      '${(_uploadProgress * 100).toStringAsFixed(0)} % · ${_uploadSpeedMbps.toStringAsFixed(1)} MB/s',
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
                   if (_selectedPaths.isNotEmpty) ...[
                     const SizedBox(height: 12),
                     Card(
@@ -1022,6 +1334,11 @@ class _FileManagerViewState extends State<FileManagerView> {
                               onPressed: _bulkMove,
                               tooltip: 'Auswahl verschieben',
                               icon: const Icon(Icons.drive_file_move_outline),
+                            ),
+                            IconButton(
+                              onPressed: _bulkArchive,
+                              tooltip: 'Auswahl als ZIP speichern',
+                              icon: const Icon(Icons.archive_outlined),
                             ),
                             IconButton(
                               onPressed: _bulkDelete,
@@ -1159,15 +1476,41 @@ class _FileManagerViewState extends State<FileManagerView> {
                                               _preview(_entries[index]);
                                             } else if (action == 'share') {
                                               _share(_entries[index]);
+                                            } else if (action == 'favorite') {
+                                              _toggleFavorite(_entries[index]);
+                                            } else if (action == 'versions') {
+                                              _openVersions(_entries[index]);
                                             } else if (action == 'rename') {
                                               _rename(_entries[index]);
                                             } else if (action == 'move') {
                                               _move(_entries[index]);
+                                            } else if (action == 'extract') {
+                                              _extract(_entries[index]);
                                             } else if (action == 'delete') {
                                               _delete(_entries[index]);
                                             }
                                           },
                                           itemBuilder: (context) => [
+                                            PopupMenuItem(
+                                              value: 'favorite',
+                                              child: ListTile(
+                                                leading: Icon(
+                                                  _favoritePaths.contains(
+                                                        _entries[index].path,
+                                                      )
+                                                      ? Icons.star_rounded
+                                                      : Icons
+                                                            .star_outline_rounded,
+                                                ),
+                                                title: Text(
+                                                  _favoritePaths.contains(
+                                                        _entries[index].path,
+                                                      )
+                                                      ? 'Favorit entfernen'
+                                                      : 'Als Favorit',
+                                                ),
+                                              ),
+                                            ),
                                             if (_canPreview(_entries[index]))
                                               const PopupMenuItem(
                                                 value: 'preview',
@@ -1176,6 +1519,16 @@ class _FileManagerViewState extends State<FileManagerView> {
                                                     Icons.visibility_outlined,
                                                   ),
                                                   title: Text('Vorschau'),
+                                                ),
+                                              ),
+                                            if (!_entries[index].isDirectory)
+                                              const PopupMenuItem(
+                                                value: 'versions',
+                                                child: ListTile(
+                                                  leading: Icon(
+                                                    Icons.history_rounded,
+                                                  ),
+                                                  title: Text('Dateiversionen'),
                                                 ),
                                               ),
                                             if (!_entries[index].isDirectory)
@@ -1198,6 +1551,18 @@ class _FileManagerViewState extends State<FileManagerView> {
                                                   title: Text('Freigabelink'),
                                                 ),
                                               ),
+                                            if (widget.canManage)
+                                              if (_entries[index].extension ==
+                                                  'zip')
+                                                const PopupMenuItem(
+                                                  value: 'extract',
+                                                  child: ListTile(
+                                                    leading: Icon(
+                                                      Icons.unarchive_outlined,
+                                                    ),
+                                                    title: Text('Entpacken'),
+                                                  ),
+                                                ),
                                             if (widget.canManage)
                                               const PopupMenuItem(
                                                 value: 'rename',
@@ -1861,7 +2226,7 @@ class _ShareManagerDialogState extends State<_ShareManagerDialog> {
                           leading: const Icon(Icons.insert_link_rounded),
                           title: Text(item.name),
                           subtitle: Text(
-                            '${item.path}\nGültig bis ${_date(item.expiresAt)}',
+                            '${item.path}\nGültig bis ${_date(item.expiresAt)} · ${item.passwordProtected ? 'Passwort' : 'Ohne Passwort'} · ${item.downloadCount}${item.downloadLimit == null ? '' : '/${item.downloadLimit}'} Downloads',
                           ),
                           isThreeLine: true,
                           trailing: IconButton(
@@ -1883,17 +2248,118 @@ class _ShareManagerDialogState extends State<_ShareManagerDialog> {
   }
 }
 
+class _VersionsDialog extends StatefulWidget {
+  final PiFileEntry entry;
+  final FileApiGet apiGet;
+  final ProtectedFilePost post;
+
+  const _VersionsDialog({
+    required this.entry,
+    required this.apiGet,
+    required this.post,
+  });
+
+  @override
+  State<_VersionsDialog> createState() => _VersionsDialogState();
+}
+
+class _VersionsDialogState extends State<_VersionsDialog> {
+  List<Map<String, dynamic>> versions = [];
+  bool loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    load();
+  }
+
+  Future<void> load() async {
+    final response = await widget.apiGet(
+      'files/versions?path=${Uri.encodeQueryComponent(widget.entry.path)}',
+      null,
+    );
+    final decoded = jsonDecode(response.body);
+    if (!mounted) return;
+    setState(() {
+      final raw = decoded is Map ? decoded['versions'] : null;
+      versions = raw is List
+          ? raw
+                .whereType<Map>()
+                .map((item) => Map<String, dynamic>.from(item))
+                .toList()
+          : [];
+      loading = false;
+    });
+  }
+
+  Future<void> restore(Map<String, dynamic> version) async {
+    final response = await widget.post('files/versions/restore', {
+      'path': widget.entry.path,
+      'id': version['id'],
+    });
+    if (!mounted) return;
+    if (response.statusCode == 200) Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text('Versionen von ${widget.entry.name}'),
+    content: SizedBox(
+      width: 560,
+      height: 380,
+      child: loading
+          ? const Center(child: CircularProgressIndicator())
+          : versions.isEmpty
+          ? const Center(child: Text('Noch keine ältere Version vorhanden.'))
+          : ListView.builder(
+              itemCount: versions.length,
+              itemBuilder: (context, index) {
+                final version = versions[index];
+                final date = DateTime.fromMillisecondsSinceEpoch(
+                  ((version['created_at'] as num?)?.toInt() ?? 0) * 1000,
+                );
+                return ListTile(
+                  leading: const Icon(Icons.history_rounded),
+                  title: Text(
+                    '${date.day.toString().padLeft(2, '0')}.${date.month.toString().padLeft(2, '0')}.${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}',
+                  ),
+                  subtitle: Text(
+                    '${((version['size'] as num? ?? 0) / 1024).toStringAsFixed(0)} KB',
+                  ),
+                  trailing: TextButton(
+                    onPressed: () => restore(version),
+                    child: const Text('Wiederherstellen'),
+                  ),
+                );
+              },
+            ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Schließen'),
+      ),
+    ],
+  );
+}
+
 class _ShareItem {
   final String id;
   final String name;
   final String path;
   final DateTime expiresAt;
+  final bool passwordProtected;
+  final int downloadCount;
+  final int? downloadLimit;
 
   const _ShareItem({
     required this.id,
     required this.name,
     required this.path,
     required this.expiresAt,
+    required this.passwordProtected,
+    required this.downloadCount,
+    required this.downloadLimit,
   });
 
   factory _ShareItem.fromJson(Map<dynamic, dynamic> json) => _ShareItem(
@@ -1903,5 +2369,8 @@ class _ShareItem {
     expiresAt: DateTime.fromMillisecondsSinceEpoch(
       ((json['expires_at'] as num?)?.toInt() ?? 0) * 1000,
     ),
+    passwordProtected: json['password_protected'] == true,
+    downloadCount: (json['download_count'] as num?)?.toInt() ?? 0,
+    downloadLimit: (json['download_limit'] as num?)?.toInt(),
   );
 }

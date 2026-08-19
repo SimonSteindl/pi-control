@@ -103,11 +103,7 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Future<void> loadAll() async {
-    await Future.wait([
-      loadData(),
-      loadHistory(),
-      loadBenchmarkHistory(),
-    ]);
+    await Future.wait([loadData(), loadHistory(), loadBenchmarkHistory()]);
   }
 
   Future<void> loadData() async {
@@ -241,9 +237,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
       for (final item in raw) {
         if (item is Map) {
-          parsed.add(
-            Map<String, dynamic>.from(item),
-          );
+          parsed.add(Map<String, dynamic>.from(item));
         }
       }
 
@@ -309,11 +303,8 @@ class _DashboardPageState extends State<DashboardPage> {
 
     if (pin != '2246') {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Falsche PIN!'),
-        ),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Falsche PIN!')));
       return;
     }
 
@@ -321,52 +312,33 @@ class _DashboardPageState extends State<DashboardPage> {
       final response = await http
           .post(
             Uri.parse('$apiBase/$path'),
-            headers: const {
-              'Content-Type': 'application/json',
-            },
-            body: jsonEncode({
-              'pin': pin,
-            }),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({'pin': pin}),
           )
           .timeout(const Duration(seconds: 10));
 
-      final decoded = response.body.isEmpty
-          ? null
-          : jsonDecode(response.body);
+      final decoded = response.body.isEmpty ? null : jsonDecode(response.body);
 
       if (response.statusCode != 200) {
-        final message = decoded is Map
-            ? decoded['error']?.toString()
-            : null;
-        throw Exception(
-          message ?? 'HTTP ${response.statusCode}',
-        );
+        final message = decoded is Map ? decoded['error']?.toString() : null;
+        throw Exception(message ?? 'HTTP ${response.statusCode}');
       }
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(successText),
-        ),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(successText)));
 
-      Future.delayed(
-        const Duration(seconds: 2),
-        () {
-          if (mounted) {
-            loadData();
-          }
-        },
-      );
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) {
+          loadData();
+        }
+      });
     } catch (e) {
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Fehler: $e'),
-        ),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Fehler: $e')));
     }
   }
 
@@ -378,10 +350,7 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  Future<void> restartService(
-    String service,
-    String label,
-  ) async {
+  Future<void> restartService(String service, String label) async {
     await sendProtectedCommand(
       path: 'service/$service/restart',
       title: '$label neu starten',
@@ -395,11 +364,8 @@ class _DashboardPageState extends State<DashboardPage> {
 
     if (pin != '2246') {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Falsche PIN!'),
-        ),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Falsche PIN!')));
       return;
     }
 
@@ -413,56 +379,35 @@ class _DashboardPageState extends State<DashboardPage> {
       final response = await http
           .post(
             Uri.parse('$apiBase/benchmark/cpu'),
-            headers: const {
-              'Content-Type': 'application/json',
-            },
-            body: jsonEncode({
-              'pin': pin,
-            }),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({'pin': pin}),
           )
           .timeout(const Duration(seconds: 15));
 
-      final decoded = response.body.isEmpty
-          ? null
-          : jsonDecode(response.body);
+      final decoded = response.body.isEmpty ? null : jsonDecode(response.body);
 
       if (response.statusCode != 200) {
-        final message = decoded is Map
-            ? decoded['error']?.toString()
-            : null;
+        final message = decoded is Map ? decoded['error']?.toString() : null;
 
-        throw Exception(
-          message ?? 'HTTP ${response.statusCode}',
-        );
+        throw Exception(message ?? 'HTTP ${response.statusCode}');
       }
 
       if (!mounted) return;
 
       setState(() {
-        benchmarkResult =
-            Map<String, dynamic>.from(decoded as Map);
+        benchmarkResult = Map<String, dynamic>.from(decoded as Map);
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'CPU-Benchmark abgeschlossen.',
-          ),
-        ),
+        const SnackBar(content: Text('CPU-Benchmark abgeschlossen.')),
       );
 
-      await Future.wait([
-        loadData(),
-        loadBenchmarkHistory(),
-      ]);
+      await Future.wait([loadData(), loadBenchmarkHistory()]);
     } catch (e) {
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Benchmark-Fehler: $e'),
-        ),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Benchmark-Fehler: $e')));
     } finally {
       if (mounted) {
         setState(() {
@@ -569,10 +514,7 @@ class _DashboardPageState extends State<DashboardPage> {
               children: [
                 const Text(
                   'App-Farbe',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 6),
                 const Text(
@@ -585,11 +527,8 @@ class _DashboardPageState extends State<DashboardPage> {
                   children: [
                     for (final option in options)
                       ChoiceChip(
-                        selected:
-                            widget.accentColor == option.color,
-                        avatar: CircleAvatar(
-                          backgroundColor: option.color,
-                        ),
+                        selected: widget.accentColor == option.color,
+                        avatar: CircleAvatar(backgroundColor: option.color),
                         label: Text(option.name),
                         onSelected: (_) {
                           widget.onAccentChanged(option.color);
@@ -663,8 +602,7 @@ class _DashboardPageState extends State<DashboardPage> {
           key: 'temperature',
           level: 'warning',
           title: 'Temperatur erhöht',
-          message:
-              '${temperature.toStringAsFixed(1)} °C – Kühlung prüfen.',
+          message: '${temperature.toStringAsFixed(1)} °C – Kühlung prüfen.',
         ),
       );
     }
@@ -675,8 +613,7 @@ class _DashboardPageState extends State<DashboardPage> {
           key: 'ram',
           level: 'warning',
           title: 'RAM fast voll',
-          message:
-              '${ramPercent.toStringAsFixed(0)} % RAM belegt.',
+          message: '${ramPercent.toStringAsFixed(0)} % RAM belegt.',
         ),
       );
     }
@@ -687,8 +624,7 @@ class _DashboardPageState extends State<DashboardPage> {
           key: 'sd',
           level: 'critical',
           title: 'SD-Karte fast voll',
-          message:
-              '${sdPercent.toStringAsFixed(0)} % Speicher belegt.',
+          message: '${sdPercent.toStringAsFixed(0)} % Speicher belegt.',
         ),
       );
     }
@@ -699,8 +635,7 @@ class _DashboardPageState extends State<DashboardPage> {
           key: 'usb',
           level: 'critical',
           title: 'NAS fast voll',
-          message:
-              '${usbPercent.toStringAsFixed(0)} % Speicher belegt.',
+          message: '${usbPercent.toStringAsFixed(0)} % Speicher belegt.',
         ),
       );
     } else if (usbFree != null && usbFree < 10) {
@@ -709,8 +644,7 @@ class _DashboardPageState extends State<DashboardPage> {
           key: 'usb',
           level: 'warning',
           title: 'NAS-Speicher wird knapp',
-          message:
-              '${usbFree.toStringAsFixed(1)} GB sind noch frei.',
+          message: '${usbFree.toStringAsFixed(1)} GB sind noch frei.',
         ),
       );
     }
@@ -741,9 +675,7 @@ class _DashboardPageState extends State<DashboardPage> {
     return result;
   }
 
-  List<double> historyValues(
-    double? Function(HistoryPoint point) getter,
-  ) {
+  List<double> historyValues(double? Function(HistoryPoint point) getter) {
     final result = <double>[];
 
     for (final point in history) {
@@ -807,14 +739,11 @@ class _DashboardPageState extends State<DashboardPage> {
 
     final cpuHistory = historyValues((point) => point.cpu);
     final ramHistory = historyValues((point) => point.ram);
-    final temperatureHistory =
-        historyValues((point) => point.temperature);
+    final temperatureHistory = historyValues((point) => point.temperature);
 
     final max24hTemperature = temperatureHistory.isEmpty
         ? null
-        : temperatureHistory.reduce(
-            (a, b) => a > b ? a : b,
-          );
+        : temperatureHistory.reduce((a, b) => a > b ? a : b);
 
     final alertItems = alerts;
     final healthScore = calculateHealthScore();
@@ -822,18 +751,14 @@ class _DashboardPageState extends State<DashboardPage> {
     final currentBenchmark =
         benchmarkResult ??
         (data?['benchmark'] is Map
-            ? Map<String, dynamic>.from(
-                data?['benchmark'] as Map,
-              )
+            ? Map<String, dynamic>.from(data?['benchmark'] as Map)
             : null);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text(
           'Pi Control',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-          ),
+          style: TextStyle(fontWeight: FontWeight.bold),
         ),
         actions: [
           IconButton(
@@ -867,10 +792,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
             const SizedBox(height: 12),
 
-            HealthScoreCard(
-              score: healthScore,
-              alertCount: alertItems.length,
-            ),
+            HealthScoreCard(score: healthScore, alertCount: alertItems.length),
 
             const SizedBox(height: 20),
 
@@ -892,9 +814,7 @@ class _DashboardPageState extends State<DashboardPage> {
                 SystemCard(
                   icon: Icons.memory,
                   title: 'CPU',
-                  value: cpuUsage == null
-                      ? '—'
-                      : '${formatNumber(cpuUsage)} %',
+                  value: cpuUsage == null ? '—' : '${formatNumber(cpuUsage)} %',
                   subtitle: cpuFrequency == null
                       ? 'Auslastung'
                       : '${formatNumber(cpuFrequency)} MHz',
@@ -958,21 +878,12 @@ class _DashboardPageState extends State<DashboardPage> {
                 leading: const Icon(Icons.analytics_outlined),
                 title: const Text(
                   'Detaillierte Systemdaten',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontWeight: FontWeight.bold),
                 ),
-                subtitle: const Text(
-                  'Auslastung und 24-Stunden-Verlauf',
-                ),
+                subtitle: const Text('Auslastung und 24-Stunden-Verlauf'),
                 children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(
-                      16,
-                      0,
-                      16,
-                      16,
-                    ),
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                     child: Column(
                       children: [
                         DetailBar(
@@ -1034,10 +945,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
             const SizedBox(height: 20),
 
-            const SectionTitle(
-              icon: Icons.storage_outlined,
-              title: 'Speicher',
-            ),
+            const SectionTitle(icon: Icons.storage_outlined, title: 'Speicher'),
 
             const SizedBox(height: 12),
 
@@ -1065,10 +973,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
             const SizedBox(height: 20),
 
-            const SectionTitle(
-              icon: Icons.network_check,
-              title: 'Netzwerk',
-            ),
+            const SectionTitle(icon: Icons.network_check, title: 'Netzwerk'),
 
             const SizedBox(height: 12),
 
@@ -1109,10 +1014,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
             const SizedBox(height: 20),
 
-            const SectionTitle(
-              icon: Icons.speed,
-              title: 'Benchmark',
-            ),
+            const SectionTitle(icon: Icons.speed, title: 'Benchmark'),
 
             const SizedBox(height: 12),
 
@@ -1134,18 +1036,9 @@ class _DashboardPageState extends State<DashboardPage> {
 
             SystemInfoCard(
               rows: [
-                InfoRowData(
-                  'Hostname',
-                  data?['hostname']?.toString() ?? '—',
-                ),
-                InfoRowData(
-                  'Modell',
-                  system?['model']?.toString() ?? '—',
-                ),
-                InfoRowData(
-                  'Betriebssystem',
-                  system?['os']?.toString() ?? '—',
-                ),
+                InfoRowData('Hostname', data?['hostname']?.toString() ?? '—'),
+                InfoRowData('Modell', system?['model']?.toString() ?? '—'),
+                InfoRowData('Betriebssystem', system?['os']?.toString() ?? '—'),
                 InfoRowData(
                   'Kernel',
                   data?['kernel']?.toString() ??
@@ -1168,18 +1061,14 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
                 InfoRowData(
                   'Warn-Push',
-                  system?['notifications']?.toString() ??
-                      'ntfy',
+                  system?['notifications']?.toString() ?? 'ntfy',
                 ),
               ],
             ),
 
             const SizedBox(height: 20),
 
-            const SectionTitle(
-              icon: Icons.settings_remote,
-              title: 'Steuerung',
-            ),
+            const SectionTitle(icon: Icons.settings_remote, title: 'Steuerung'),
 
             const SizedBox(height: 12),
 
@@ -1190,9 +1079,7 @@ class _DashboardPageState extends State<DashboardPage> {
                 icon: const Icon(Icons.restart_alt),
                 label: const Text('Raspberry Pi neu starten'),
                 style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 16,
-                  ),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
                 ),
               ),
             ),
@@ -1205,17 +1092,12 @@ class _DashboardPageState extends State<DashboardPage> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(
-                        Icons.error_outline,
-                        color: Colors.red,
-                      ),
+                      const Icon(Icons.error_outline, color: Colors.red),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
                           'Verbindungsfehler: $error',
-                          style: const TextStyle(
-                            color: Colors.red,
-                          ),
+                          style: const TextStyle(color: Colors.red),
                         ),
                       ),
                     ],
@@ -1244,7 +1126,6 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 }
-
 
 class HealthScoreCard extends StatelessWidget {
   final int score;
@@ -1295,8 +1176,7 @@ class HealthScoreCard extends StatelessWidget {
                     value: score / 100,
                     strokeWidth: 7,
                     color: color,
-                    backgroundColor:
-                        color.withValues(alpha: 0.12),
+                    backgroundColor: color.withValues(alpha: 0.12),
                   ),
                   Center(
                     child: Text(
@@ -1314,16 +1194,11 @@ class HealthScoreCard extends StatelessWidget {
             const SizedBox(width: 16),
             Expanded(
               child: Column(
-                crossAxisAlignment:
-                    CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     children: [
-                      Icon(
-                        icon,
-                        size: 20,
-                        color: color,
-                      ),
+                      Icon(icon, size: 20, color: color),
                       const SizedBox(width: 7),
                       const Text(
                         'Systemzustand',
@@ -1337,20 +1212,14 @@ class HealthScoreCard extends StatelessWidget {
                   const SizedBox(height: 5),
                   Text(
                     '$label · $score von 100 Punkten',
-                    style: TextStyle(
-                      color: color,
-                      fontWeight: FontWeight.w600,
-                    ),
+                    style: TextStyle(color: color, fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 3),
                   Text(
                     alertCount == 0
                         ? 'Keine aktiven Warnungen'
                         : '$alertCount aktive Warnung${alertCount == 1 ? '' : 'en'}',
-                    style: const TextStyle(
-                      color: Colors.grey,
-                      fontSize: 11,
-                    ),
+                    style: const TextStyle(color: Colors.grey, fontSize: 11),
                   ),
                 ],
               ),
@@ -1406,9 +1275,7 @@ class BenchmarkCard extends StatelessWidget {
   String formatTimestamp(dynamic value) {
     if (value is! num) return '—';
 
-    final date = DateTime.fromMillisecondsSinceEpoch(
-      value.toInt() * 1000,
-    );
+    final date = DateTime.fromMillisecondsSinceEpoch(value.toInt() * 1000);
 
     return '${twoDigits(date.day)}.${twoDigits(date.month)}. '
         '${twoDigits(date.hour)}:${twoDigits(date.minute)}';
@@ -1440,8 +1307,7 @@ class BenchmarkCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
-          crossAxisAlignment:
-              CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
@@ -1449,25 +1315,19 @@ class BenchmarkCard extends StatelessWidget {
                   width: 48,
                   height: 48,
                   decoration: BoxDecoration(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .primary
+                    color: Theme.of(context).colorScheme.primary
                         .withValues(alpha: 0.14),
-                    borderRadius:
-                        BorderRadius.circular(15),
+                    borderRadius: BorderRadius.circular(15),
                   ),
                   child: Icon(
                     Icons.bolt,
-                    color: Theme.of(context)
-                        .colorScheme
-                        .primary,
+                    color: Theme.of(context).colorScheme.primary,
                   ),
                 ),
                 const SizedBox(width: 14),
                 const Expanded(
                   child: Column(
-                    crossAxisAlignment:
-                        CrossAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
                         'CPU-Kurzbenchmark',
@@ -1478,10 +1338,7 @@ class BenchmarkCard extends StatelessWidget {
                       ),
                       Text(
                         '5 Sekunden · SHA-256 · höher = besser',
-                        style: TextStyle(
-                          color: Colors.grey,
-                          fontSize: 11,
-                        ),
+                        style: TextStyle(color: Colors.grey, fontSize: 11),
                       ),
                     ],
                   ),
@@ -1551,10 +1408,7 @@ class BenchmarkCard extends StatelessWidget {
 
               Row(
                 children: [
-                  const Icon(
-                    Icons.timeline,
-                    size: 20,
-                  ),
+                  const Icon(Icons.timeline, size: 20),
                   const SizedBox(width: 8),
                   const Expanded(
                     child: Text(
@@ -1567,10 +1421,7 @@ class BenchmarkCard extends StatelessWidget {
                   ),
                   Text(
                     '${history.length} Runs',
-                    style: const TextStyle(
-                      color: Colors.grey,
-                      fontSize: 11,
-                    ),
+                    style: const TextStyle(color: Colors.grey, fontSize: 11),
                   ),
                 ],
               ),
@@ -1583,9 +1434,7 @@ class BenchmarkCard extends StatelessWidget {
                 child: CustomPaint(
                   painter: BenchmarkHistoryPainter(
                     values: scoreHistory,
-                    color: Theme.of(context)
-                        .colorScheme
-                        .primary,
+                    color: Theme.of(context).colorScheme.primary,
                   ),
                 ),
               ),
@@ -1593,29 +1442,19 @@ class BenchmarkCard extends StatelessWidget {
               const SizedBox(height: 8),
 
               const Row(
-                mainAxisAlignment:
-                    MainAxisAlignment.spaceBetween,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
                     'älter',
-                    style: TextStyle(
-                      color: Colors.grey,
-                      fontSize: 9,
-                    ),
+                    style: TextStyle(color: Colors.grey, fontSize: 9),
                   ),
                   Text(
                     'höher = besser',
-                    style: TextStyle(
-                      color: Colors.grey,
-                      fontSize: 9,
-                    ),
+                    style: TextStyle(color: Colors.grey, fontSize: 9),
                   ),
                   Text(
                     'neu',
-                    style: TextStyle(
-                      color: Colors.grey,
-                      fontSize: 9,
-                    ),
+                    style: TextStyle(color: Colors.grey, fontSize: 9),
                   ),
                 ],
               ),
@@ -1624,37 +1463,25 @@ class BenchmarkCard extends StatelessWidget {
 
               Card(
                 elevation: 0,
-                color: Theme.of(context)
-                    .colorScheme
-                    .surfaceContainerHighest
+                color: Theme.of(context).colorScheme.surfaceContainerHighest
                     .withValues(alpha: 0.35),
                 child: Column(
                   children: [
-                    for (int i = history.length - 1;
-                        i >= 0 &&
-                            i >= history.length - 8;
-                        i--)
+                    for (
+                      int i = history.length - 1;
+                      i >= 0 && i >= history.length - 8;
+                      i--
+                    )
                       BenchmarkHistoryRow(
                         item: history[i],
                         bestScore: history
-                            .map(
-                              (e) =>
-                                  asDouble(e['score']) ??
-                                  0,
-                            )
-                            .fold<double>(
-                              0,
-                              (a, b) => a > b ? a : b,
-                            ),
+                            .map((e) => asDouble(e['score']) ?? 0)
+                            .fold<double>(0, (a, b) => a > b ? a : b),
                         formatScore: formatScore,
-                        formatFrequency:
-                            formatFrequency,
+                        formatFrequency: formatFrequency,
                         formatTemp: formatTemp,
-                        formatTimestamp:
-                            formatTimestamp,
-                        showDivider:
-                            i > 0 &&
-                            i > history.length - 8,
+                        formatTimestamp: formatTimestamp,
+                        showDivider: i > 0 && i > history.length - 8,
                       ),
                   ],
                 ),
@@ -1671,20 +1498,14 @@ class BenchmarkCard extends StatelessWidget {
                     ? const SizedBox(
                         width: 18,
                         height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                        ),
+                        child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.play_arrow),
                 label: Text(
-                  running
-                      ? 'Benchmark läuft...'
-                      : 'CPU-Benchmark starten',
+                  running ? 'Benchmark läuft...' : 'CPU-Benchmark starten',
                 ),
                 style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 14,
-                  ),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
               ),
             ),
@@ -1693,10 +1514,7 @@ class BenchmarkCard extends StatelessWidget {
 
             const Text(
               'Der Test belastet die CPU nur kurz. Nach einem Lauf gilt ein Cooldown von 30 Sekunden.',
-              style: TextStyle(
-                color: Colors.grey,
-                fontSize: 10,
-              ),
+              style: TextStyle(color: Colors.grey, fontSize: 10),
             ),
           ],
         ),
@@ -1704,7 +1522,6 @@ class BenchmarkCard extends StatelessWidget {
     );
   }
 }
-
 
 class BenchmarkHistoryRow extends StatelessWidget {
   final Map<String, dynamic> item;
@@ -1730,64 +1547,47 @@ class BenchmarkHistoryRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final score = asDouble(item['score']);
     final frequency =
-        item['frequency_before_mhz'] ??
-        item['frequency_after_mhz'];
+        item['frequency_before_mhz'] ?? item['frequency_after_mhz'];
 
-    final isBest =
-        score != null &&
-        bestScore > 0 &&
-        score >= bestScore;
+    final isBest = score != null && bestScore > 0 && score >= bestScore;
 
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: 12,
-            vertical: 10,
-          ),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Row(
             children: [
               Container(
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                  color: (isBest
-                          ? Colors.green
-                          : Theme.of(context)
-                              .colorScheme
-                              .primary)
-                      .withValues(alpha: 0.12),
-                  borderRadius:
-                      BorderRadius.circular(11),
+                  color:
+                      (isBest
+                              ? Colors.green
+                              : Theme.of(context).colorScheme.primary)
+                          .withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(11),
                 ),
                 child: Icon(
-                  isBest
-                      ? Icons.emoji_events
-                      : Icons.speed,
+                  isBest ? Icons.emoji_events : Icons.speed,
                   size: 18,
                   color: isBest
                       ? Colors.green
-                      : Theme.of(context)
-                          .colorScheme
-                          .primary,
+                      : Theme.of(context).colorScheme.primary,
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
-                  crossAxisAlignment:
-                      CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       children: [
                         Text(
                           formatScore(score),
                           style: TextStyle(
-                            fontWeight:
-                                FontWeight.bold,
-                            color: isBest
-                                ? Colors.green
-                                : null,
+                            fontWeight: FontWeight.bold,
+                            color: isBest ? Colors.green : null,
                           ),
                         ),
                         if (isBest) ...[
@@ -1797,8 +1597,7 @@ class BenchmarkHistoryRow extends StatelessWidget {
                             style: TextStyle(
                               color: Colors.green,
                               fontSize: 9,
-                              fontWeight:
-                                  FontWeight.bold,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
                         ],
@@ -1808,29 +1607,19 @@ class BenchmarkHistoryRow extends StatelessWidget {
                     Text(
                       '${formatFrequency(frequency)} · '
                       '${formatTemp(item['temperature_after'])}',
-                      style: const TextStyle(
-                        color: Colors.grey,
-                        fontSize: 10,
-                      ),
+                      style: const TextStyle(color: Colors.grey, fontSize: 10),
                     ),
                   ],
                 ),
               ),
               Text(
                 formatTimestamp(item['timestamp']),
-                style: const TextStyle(
-                  color: Colors.grey,
-                  fontSize: 10,
-                ),
+                style: const TextStyle(color: Colors.grey, fontSize: 10),
               ),
             ],
           ),
         ),
-        if (showDivider)
-          const Divider(
-            height: 1,
-            indent: 58,
-          ),
+        if (showDivider) const Divider(height: 1, indent: 58),
       ],
     );
   }
@@ -1840,37 +1629,25 @@ class BenchmarkHistoryPainter extends CustomPainter {
   final List<double> values;
   final Color color;
 
-  BenchmarkHistoryPainter({
-    required this.values,
-    required this.color,
-  });
+  BenchmarkHistoryPainter({required this.values, required this.color});
 
   @override
   void paint(Canvas canvas, Size size) {
     if (values.isEmpty) return;
 
     final gridPaint = Paint()
-      ..color =
-          Colors.white.withValues(alpha: 0.05)
+      ..color = Colors.white.withValues(alpha: 0.05)
       ..strokeWidth = 1;
 
     for (int i = 1; i < 4; i++) {
       final y = size.height * i / 4;
-      canvas.drawLine(
-        Offset(0, y),
-        Offset(size.width, y),
-        gridPaint,
-      );
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
     }
 
-    final minValue =
-        values.reduce((a, b) => a < b ? a : b);
-    final maxValue =
-        values.reduce((a, b) => a > b ? a : b);
+    final minValue = values.reduce((a, b) => a < b ? a : b);
+    final maxValue = values.reduce((a, b) => a > b ? a : b);
 
-    final range = (maxValue - minValue).abs() < 1
-        ? 1.0
-        : maxValue - minValue;
+    final range = (maxValue - minValue).abs() < 1 ? 1.0 : maxValue - minValue;
 
     final linePaint = Paint()
       ..color = color
@@ -1889,13 +1666,12 @@ class BenchmarkHistoryPainter extends CustomPainter {
     for (int i = 0; i < values.length; i++) {
       final x = values.length == 1
           ? size.width / 2
-          : i * size.width /
-              (values.length - 1);
+          : i * size.width / (values.length - 1);
 
-      final normalized =
-          (values[i] - minValue) / range;
+      final normalized = (values[i] - minValue) / range;
 
-      final y = size.height -
+      final y =
+          size.height -
           (normalized * size.height * 0.82) -
           (size.height * 0.09);
 
@@ -1910,42 +1686,26 @@ class BenchmarkHistoryPainter extends CustomPainter {
     }
 
     if (values.length > 1) {
-      fillPath.lineTo(
-        size.width,
-        size.height,
-      );
+      fillPath.lineTo(size.width, size.height);
       fillPath.close();
 
-      canvas.drawPath(
-        fillPath,
-        fillPaint,
-      );
+      canvas.drawPath(fillPath, fillPaint);
 
-      canvas.drawPath(
-        linePath,
-        linePaint,
-      );
+      canvas.drawPath(linePath, linePaint);
     } else {
       final dot = Paint()
         ..color = color
         ..style = PaintingStyle.fill;
 
-      canvas.drawCircle(
-        Offset(
-          size.width / 2,
-          size.height / 2,
-        ),
-        5,
-        dot,
-      );
+      canvas.drawCircle(Offset(size.width / 2, size.height / 2), 5, dot);
     }
 
     if (values.length > 1) {
       final last = values.last;
-      final normalized =
-          (last - minValue) / range;
+      final normalized = (last - minValue) / range;
 
-      final y = size.height -
+      final y =
+          size.height -
           (normalized * size.height * 0.82) -
           (size.height * 0.09);
 
@@ -1960,9 +1720,7 @@ class BenchmarkHistoryPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(
-    covariant BenchmarkHistoryPainter oldDelegate,
-  ) {
+  bool shouldRepaint(covariant BenchmarkHistoryPainter oldDelegate) {
     return true;
   }
 }
@@ -1971,11 +1729,7 @@ class SectionTitle extends StatelessWidget {
   final IconData icon;
   final String title;
 
-  const SectionTitle({
-    super.key,
-    required this.icon,
-    required this.title,
-  });
+  const SectionTitle({super.key, required this.icon, required this.title});
 
   @override
   Widget build(BuildContext context) {
@@ -1985,10 +1739,7 @@ class SectionTitle extends StatelessWidget {
         const SizedBox(width: 10),
         Text(
           title,
-          style: const TextStyle(
-            fontSize: 22,
-            fontWeight: FontWeight.bold,
-          ),
+          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
         ),
       ],
     );
@@ -2011,8 +1762,9 @@ class StatusOverviewCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final criticalCount =
-        alerts.where((item) => item.level == 'critical').length;
+    final criticalCount = alerts
+        .where((item) => item.level == 'critical')
+        .length;
 
     Color color;
     IconData icon;
@@ -2032,8 +1784,10 @@ class StatusOverviewCard extends StatelessWidget {
     } else if (criticalCount > 0) {
       color = Colors.red;
       icon = Icons.error;
-      title = '$criticalCount kritische Warnung${criticalCount == 1 ? '' : 'en'}';
-      subtitle = '${alerts.length} Problem${alerts.length == 1 ? '' : 'e'} erkannt';
+      title =
+          '$criticalCount kritische Warnung${criticalCount == 1 ? '' : 'en'}';
+      subtitle =
+          '${alerts.length} Problem${alerts.length == 1 ? '' : 'e'} erkannt';
     } else if (alerts.isNotEmpty) {
       color = Colors.orange;
       icon = Icons.warning_amber_rounded;
@@ -2058,10 +1812,7 @@ class StatusOverviewCard extends StatelessWidget {
                 color: color.withValues(alpha: 0.14),
                 borderRadius: BorderRadius.circular(15),
               ),
-              child: Icon(
-                icon,
-                color: color,
-              ),
+              child: Icon(icon, color: color),
             ),
             const SizedBox(width: 14),
             Expanded(
@@ -2080,10 +1831,7 @@ class StatusOverviewCard extends StatelessWidget {
                   const SizedBox(height: 3),
                   Text(
                     lastUpdated,
-                    style: const TextStyle(
-                      color: Colors.grey,
-                      fontSize: 11,
-                    ),
+                    style: const TextStyle(color: Colors.grey, fontSize: 11),
                   ),
                 ],
               ),
@@ -2103,10 +1851,7 @@ class StatusOverviewCard extends StatelessWidget {
 class AlertsCard extends StatelessWidget {
   final List<AlertItem> alerts;
 
-  const AlertsCard({
-    super.key,
-    required this.alerts,
-  });
+  const AlertsCard({super.key, required this.alerts});
 
   @override
   Widget build(BuildContext context) {
@@ -2116,9 +1861,7 @@ class AlertsCard extends StatelessWidget {
         leading: const Icon(Icons.notifications_active_outlined),
         title: Text(
           '${alerts.length} aktive Warnung${alerts.length == 1 ? '' : 'en'}',
-          style: const TextStyle(
-            fontWeight: FontWeight.bold,
-          ),
+          style: const TextStyle(fontWeight: FontWeight.bold),
         ),
         children: [
           for (final alert in alerts)
@@ -2127,9 +1870,7 @@ class AlertsCard extends StatelessWidget {
                 alert.level == 'critical'
                     ? Icons.error
                     : Icons.warning_amber_rounded,
-                color: alert.level == 'critical'
-                    ? Colors.red
-                    : Colors.orange,
+                color: alert.level == 'critical' ? Colors.red : Colors.orange,
               ),
               title: Text(alert.title),
               subtitle: Text(alert.message),
@@ -2140,10 +1881,7 @@ class AlertsCard extends StatelessWidget {
   }
 }
 
-enum SystemCardType {
-  percent,
-  temperature,
-}
+enum SystemCardType { percent, temperature }
 
 class SystemCard extends StatelessWidget {
   final IconData icon;
@@ -2195,9 +1933,7 @@ class SystemCard extends StatelessWidget {
 
     return Card(
       elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
@@ -2212,11 +1948,7 @@ class SystemCard extends StatelessWidget {
                     color: color.withValues(alpha: 0.14),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Icon(
-                    icon,
-                    color: color,
-                    size: 21,
-                  ),
+                  child: Icon(icon, color: color, size: 21),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -2247,9 +1979,7 @@ class SystemCard extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 23,
                   fontWeight: FontWeight.bold,
-                  color: type == SystemCardType.temperature
-                      ? color
-                      : null,
+                  color: type == SystemCardType.temperature ? color : null,
                 ),
               ),
             ),
@@ -2270,10 +2000,7 @@ class SystemCard extends StatelessWidget {
               alignment: Alignment.centerLeft,
               child: Text(
                 subtitle,
-                style: const TextStyle(
-                  color: Colors.grey,
-                  fontSize: 11,
-                ),
+                style: const TextStyle(color: Colors.grey, fontSize: 11),
               ),
             ),
           ],
@@ -2307,16 +2034,10 @@ class TemperatureStatsCard extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         child: Row(
           children: [
-            const Icon(
-              Icons.thermostat,
-              color: Colors.green,
-            ),
+            const Icon(Icons.thermostat, color: Colors.green),
             const SizedBox(width: 12),
             Expanded(
-              child: _MiniStat(
-                label: 'Jetzt',
-                value: text(current),
-              ),
+              child: _MiniStat(label: 'Jetzt', value: text(current)),
             ),
             Expanded(
               child: _MiniStat(
@@ -2325,10 +2046,7 @@ class TemperatureStatsCard extends StatelessWidget {
               ),
             ),
             Expanded(
-              child: _MiniStat(
-                label: 'Max. 24h',
-                value: text(max24h),
-              ),
+              child: _MiniStat(label: 'Max. 24h', value: text(max24h)),
             ),
           ],
         ),
@@ -2341,32 +2059,20 @@ class _MiniStat extends StatelessWidget {
   final String label;
   final String value;
 
-  const _MiniStat({
-    required this.label,
-    required this.value,
-  });
+  const _MiniStat({required this.label, required this.value});
 
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: const TextStyle(
-            color: Colors.grey,
-            fontSize: 10,
-          ),
-        ),
+        Text(label, style: const TextStyle(color: Colors.grey, fontSize: 10)),
         const SizedBox(height: 3),
         FittedBox(
           fit: BoxFit.scaleDown,
           child: Text(
             value,
-            style: const TextStyle(
-              fontWeight: FontWeight.bold,
-              fontSize: 13,
-            ),
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
           ),
         ),
       ],
@@ -2412,9 +2118,7 @@ class DetailBar extends StatelessWidget {
           width: 80,
           child: Text(
             title,
-            style: const TextStyle(
-              fontWeight: FontWeight.w600,
-            ),
+            style: const TextStyle(fontWeight: FontWeight.w600),
           ),
         ),
         Expanded(
@@ -2424,8 +2128,7 @@ class DetailBar extends StatelessWidget {
               value: progress,
               minHeight: 7,
               color: barColor,
-              backgroundColor:
-                  barColor.withValues(alpha: 0.12),
+              backgroundColor: barColor.withValues(alpha: 0.12),
             ),
           ),
         ),
@@ -2472,9 +2175,7 @@ class LiveChartCard extends StatelessWidget {
 
     return Card(
       elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(18),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
@@ -2489,11 +2190,7 @@ class LiveChartCard extends StatelessWidget {
                     color: lineColor.withValues(alpha: 0.14),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Icon(
-                    icon,
-                    color: lineColor,
-                    size: 22,
-                  ),
+                  child: Icon(icon, color: lineColor, size: 22),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -2509,21 +2206,14 @@ class LiveChartCard extends StatelessWidget {
                       ),
                       const Text(
                         '1 Messpunkt/min · bis zu 24h',
-                        style: TextStyle(
-                          color: Colors.grey,
-                          fontSize: 10,
-                        ),
+                        style: TextStyle(color: Colors.grey, fontSize: 10),
                       ),
                     ],
                   ),
                 ),
                 Text(
-                  current == null
-                      ? '—'
-                      : '${current.toStringAsFixed(1)} $unit',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                  ),
+                  current == null ? '—' : '${current.toStringAsFixed(1)} $unit',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
               ],
             ),
@@ -2547,19 +2237,13 @@ class LiveChartCard extends StatelessWidget {
                   minimum == null
                       ? 'Min —'
                       : 'Min ${minimum.toStringAsFixed(1)} $unit',
-                  style: const TextStyle(
-                    color: Colors.grey,
-                    fontSize: 10,
-                  ),
+                  style: const TextStyle(color: Colors.grey, fontSize: 10),
                 ),
                 Text(
                   maximum == null
                       ? 'Max —'
                       : 'Max ${maximum.toStringAsFixed(1)} $unit',
-                  style: const TextStyle(
-                    color: Colors.grey,
-                    fontSize: 10,
-                  ),
+                  style: const TextStyle(color: Colors.grey, fontSize: 10),
                 ),
               ],
             ),
@@ -2591,11 +2275,7 @@ class LiveChartPainter extends CustomPainter {
 
     for (int i = 1; i < 4; i++) {
       final y = size.height * i / 4;
-      canvas.drawLine(
-        Offset(0, y),
-        Offset(size.width, y),
-        gridPaint,
-      );
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
     }
 
     final linePaint = Paint()
@@ -2619,8 +2299,7 @@ class LiveChartPainter extends CustomPainter {
           ? size.width / 2
           : i * size.width / (effectiveValues.length - 1);
 
-      final normalized =
-          (effectiveValues[i] / maxValue).clamp(0.0, 1.0);
+      final normalized = (effectiveValues[i] / maxValue).clamp(0.0, 1.0);
 
       final y = size.height - (normalized * size.height);
 
@@ -2642,12 +2321,9 @@ class LiveChartPainter extends CustomPainter {
     }
 
     final lastValue = effectiveValues.last;
-    final normalized =
-        (lastValue / maxValue).clamp(0.0, 1.0);
+    final normalized = (lastValue / maxValue).clamp(0.0, 1.0);
 
-    final lastX = effectiveValues.length == 1
-        ? size.width / 2
-        : size.width;
+    final lastX = effectiveValues.length == 1 ? size.width / 2 : size.width;
 
     final lastY = size.height - (normalized * size.height);
 
@@ -2660,10 +2336,7 @@ class LiveChartPainter extends CustomPainter {
     );
   }
 
-  List<double> _downsample(
-    List<double> source,
-    double width,
-  ) {
+  List<double> _downsample(List<double> source, double width) {
     final maxPoints = width.ceil().clamp(60, 400);
 
     if (source.length <= maxPoints) {
@@ -2674,10 +2347,7 @@ class LiveChartPainter extends CustomPainter {
     final step = source.length / maxPoints;
 
     for (int i = 0; i < maxPoints; i++) {
-      final index = (i * step).floor().clamp(
-            0,
-            source.length - 1,
-          );
+      final index = (i * step).floor().clamp(0, source.length - 1);
       result.add(source[index]);
     }
 
@@ -2686,9 +2356,7 @@ class LiveChartPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(
-    covariant LiveChartPainter oldDelegate,
-  ) {
+  bool shouldRepaint(covariant LiveChartPainter oldDelegate) {
     return true;
   }
 }
@@ -2770,8 +2438,7 @@ class StorageCard extends StatelessWidget {
                 value: (p / 100).clamp(0.0, 1.0),
                 minHeight: 8,
                 color: color,
-                backgroundColor:
-                    color.withValues(alpha: 0.12),
+                backgroundColor: color.withValues(alpha: 0.12),
               ),
             ),
             const SizedBox(height: 12),
@@ -2852,20 +2519,13 @@ class NetworkCard extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            _InfoLine(
-              icon: Icons.lan,
-              label: 'LAN-IP',
-              value: lanIp ?? '—',
-            ),
+            _InfoLine(icon: Icons.lan, label: 'LAN-IP', value: lanIp ?? '—'),
             const Divider(height: 24),
             _InfoLine(
               icon: Icons.vpn_lock,
               label: 'Tailscale-IP',
-              value: tailscaleOnline
-                  ? (tailscaleIp ?? '—')
-                  : 'Offline',
-              valueColor:
-                  tailscaleOnline ? Colors.green : Colors.red,
+              value: tailscaleOnline ? (tailscaleIp ?? '—') : 'Offline',
+              valueColor: tailscaleOnline ? Colors.green : Colors.red,
             ),
             const Divider(height: 24),
             _InfoLine(
@@ -2903,10 +2563,7 @@ class _InfoLine extends StatelessWidget {
         Expanded(child: Text(label)),
         Text(
           value,
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            color: valueColor,
-          ),
+          style: TextStyle(fontWeight: FontWeight.bold, color: valueColor),
         ),
       ],
     );
@@ -2945,10 +2602,7 @@ class ServiceControlCard extends StatelessWidget {
                 color: color.withValues(alpha: 0.14),
                 borderRadius: BorderRadius.circular(13),
               ),
-              child: Icon(
-                icon,
-                color: color,
-              ),
+              child: Icon(icon, color: color),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -2964,10 +2618,7 @@ class ServiceControlCard extends StatelessWidget {
                   ),
                   Text(
                     description,
-                    style: const TextStyle(
-                      color: Colors.grey,
-                      fontSize: 12,
-                    ),
+                    style: const TextStyle(color: Colors.grey, fontSize: 12),
                   ),
                 ],
               ),
@@ -2987,10 +2638,7 @@ class ServiceControlCard extends StatelessWidget {
 class SystemInfoCard extends StatelessWidget {
   final List<InfoRowData> rows;
 
-  const SystemInfoCard({
-    super.key,
-    required this.rows,
-  });
+  const SystemInfoCard({super.key, required this.rows});
 
   @override
   Widget build(BuildContext context) {
@@ -2999,13 +2647,9 @@ class SystemInfoCard extends StatelessWidget {
         leading: const Icon(Icons.developer_board),
         title: const Text(
           'Raspberry Pi Details',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-          ),
+          style: TextStyle(fontWeight: FontWeight.bold),
         ),
-        subtitle: const Text(
-          'Modell, OS, Kernel, Uptime und mehr',
-        ),
+        subtitle: const Text('Modell, OS, Kernel, Uptime und mehr'),
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -3013,8 +2657,7 @@ class SystemInfoCard extends StatelessWidget {
               children: [
                 for (int i = 0; i < rows.length; i++) ...[
                   _SystemInfoRow(data: rows[i]),
-                  if (i != rows.length - 1)
-                    const Divider(height: 18),
+                  if (i != rows.length - 1) const Divider(height: 18),
                 ],
               ],
             ),
@@ -3028,9 +2671,7 @@ class SystemInfoCard extends StatelessWidget {
 class _SystemInfoRow extends StatelessWidget {
   final InfoRowData data;
 
-  const _SystemInfoRow({
-    required this.data,
-  });
+  const _SystemInfoRow({required this.data});
 
   @override
   Widget build(BuildContext context) {
@@ -3039,20 +2680,13 @@ class _SystemInfoRow extends StatelessWidget {
       children: [
         SizedBox(
           width: 110,
-          child: Text(
-            data.label,
-            style: const TextStyle(
-              color: Colors.grey,
-            ),
-          ),
+          child: Text(data.label, style: const TextStyle(color: Colors.grey)),
         ),
         Expanded(
           child: Text(
             data.value,
             textAlign: TextAlign.right,
-            style: const TextStyle(
-              fontWeight: FontWeight.w600,
-            ),
+            style: const TextStyle(fontWeight: FontWeight.w600),
           ),
         ),
       ],
@@ -3092,20 +2726,14 @@ class AccentOption {
   final String name;
   final Color color;
 
-  const AccentOption(
-    this.name,
-    this.color,
-  );
+  const AccentOption(this.name, this.color);
 }
 
 class InfoRowData {
   final String label;
   final String value;
 
-  const InfoRowData(
-    this.label,
-    this.value,
-  );
+  const InfoRowData(this.label, this.value);
 }
 
 double? asDouble(dynamic value) {

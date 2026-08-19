@@ -65,6 +65,60 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _chooseServer() async {
+    final controller = TextEditingController();
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Raspberry Pi auswählen'),
+        content: SizedBox(
+          width: 480,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ...PiApiClient.candidates.map(
+                (base) => ListTile(
+                  onTap: () => Navigator.pop(context, base),
+                  leading: Icon(
+                    base == widget.client.activeBase
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_off,
+                  ),
+                  title: Text(base),
+                ),
+              ),
+              const Divider(),
+              TextField(
+                controller: controller,
+                decoration: const InputDecoration(
+                  labelText: 'Weitere Pi-Control-Adresse',
+                  hintText: 'https://mein-pi.example.com',
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Abbrechen'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Hinzufügen'),
+          ),
+        ],
+      ),
+    );
+    if (selected == null || selected.isEmpty) return;
+    if (PiApiClient.candidates.contains(selected)) {
+      await widget.client.selectServer(selected);
+    } else {
+      await widget.client.addServer(selected);
+    }
+    if (mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -96,6 +150,19 @@ class _LoginScreenState extends State<LoginScreen> {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: colorScheme.tertiary.withValues(alpha: 0.08),
+              ),
+            ),
+          ),
+          SafeArea(
+            child: Align(
+              alignment: Alignment.topRight,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: FilledButton.tonalIcon(
+                  onPressed: _chooseServer,
+                  icon: const Icon(Icons.dns_outlined),
+                  label: const Text('Raspberry Pi'),
+                ),
               ),
             ),
           ),

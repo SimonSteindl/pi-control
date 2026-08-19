@@ -88,6 +88,46 @@ class _BackupDialogState extends State<_BackupDialog> {
     }
   }
 
+  Future<void> _restore(_BackupItem item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.restore_rounded),
+        title: const Text('Backup wiederherstellen?'),
+        content: Text(
+          '${item.name} wird eingespielt. Pi Control startet danach neu und ist kurz nicht erreichbar.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Abbrechen'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Wiederherstellen'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final response = await widget.client.post(
+      'backups/restore',
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({'name': item.name}),
+      timeout: const Duration(seconds: 30),
+    );
+    if (response.statusCode != 200) {
+      throw widget.client.responseException(response);
+    }
+    if (!mounted) return;
+    Navigator.of(context).pop();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Wiederherstellung gestartet. Pi Control startet neu …'),
+      ),
+    );
+  }
+
   String _formatSize(int bytes) {
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)} KB';
     return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
@@ -176,6 +216,11 @@ class _BackupDialogState extends State<_BackupDialog> {
                           title: Text(item.name),
                           subtitle: Text(
                             '${_formatDate(item.createdAt)} · ${_formatSize(item.size)}',
+                          ),
+                          trailing: IconButton(
+                            onPressed: () => _restore(item),
+                            tooltip: 'Wiederherstellen',
+                            icon: const Icon(Icons.restore_rounded),
                           ),
                         );
                       },
