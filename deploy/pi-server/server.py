@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+import urllib.parse
 import zipfile
 from functools import wraps
 from pathlib import Path
@@ -43,7 +44,7 @@ BACKUP_DIRECTORY = Path(USB_PATH) / "Backups" / "Pi-Control"
 BACKUP_SCRIPT = BASE_DIR / "backup.sh"
 MAINTENANCE_FLAG = BASE_DIR / "maintenance.enabled"
 MAINTENANCE_PAGE = BASE_DIR / "maintenance.html"
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.1.0"
 
 HISTORY_INTERVAL_SECONDS = 60
 HISTORY_MAX_POINTS = 24 * 60
@@ -62,6 +63,10 @@ benchmark_data = {}
 benchmark_history = []
 last_benchmark_finished = 0.0
 last_housekeeping_at = 0.0
+
+aviation_weather_lock = threading.Lock()
+aviation_weather_cache = {}
+AVIATION_WEATHER_CACHE_SECONDS = 60
 
 BENCHMARK_HISTORY_MAX_POINTS = 50
 
@@ -3722,6 +3727,78 @@ def api_info():
         return jsonify({
             "error": str(exc),
         }), 500
+
+
+def fetch_aviation_weather_product(product, icao):
+    query = urllib.parse.urlencode({
+        "ids": icao,
+        "format": "json",
+        **({"taf": "false", "hours": "3"} if product == "metar" else {}),
+    })
+    url = f"https://aviationweather.gov/api/data/{product}?{query}"
+    upstream_request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": (
+                "Pi-Control/2.1.0 "
+                "(https://github.com/SimonSteindl/pi-control)"
+            ),
+        },
+    )
+    with urllib.request.urlopen(upstream_request, timeout=10) as response:
+        decoded = json.loads(response.read().decode("utf-8"))
+    if not isinstance(decoded, list):
+        raise ValueError("Unerwartete Antwort des Flugwetterdienstes.")
+    return decoded[0] if decoded else None
+
+
+@app.get("/api/aviation-weather")
+@authentication_required("dashboard_view")
+def api_aviation_weather():
+    icao = request.args.get("icao", "LOWL").strip().upper()
+    if len(icao) != 4 or not icao.isalnum():
+        return jsonify({
+            "ok": False,
+            "error": "Bitte einen vierstelligen ICAO-Code eingeben.",
+        }), 400
+
+    now = time.time()
+    with aviation_weather_lock:
+        cached = aviation_weather_cache.get(icao)
+        if cached and now - cached["fetched_at"] < AVIATION_WEATHER_CACHE_SECONDS:
+            return jsonify({**cached["payload"], "cached": True})
+
+    try:
+        metar = fetch_aviation_weather_product("metar", icao)
+        taf = fetch_aviation_weather_product("taf", icao)
+    except Exception as exc:
+        return jsonify({
+            "ok": False,
+            "error": f"Flugwetter konnte nicht geladen werden: {exc}",
+        }), 502
+
+    if metar is None and taf is None:
+        return jsonify({
+            "ok": False,
+            "error": f"Für {icao} wurden keine METAR- oder TAF-Daten gefunden.",
+        }), 404
+
+    payload = {
+        "ok": True,
+        "icao": icao,
+        "fetched_at": int(now),
+        "source": "AviationWeather.gov",
+        "metar": metar,
+        "taf": taf,
+        "metar_taf_url": f"https://metar-taf.com/de/{icao}",
+    }
+    with aviation_weather_lock:
+        aviation_weather_cache[icao] = {
+            "fetched_at": now,
+            "payload": payload,
+        }
+    return jsonify(payload)
 
 
 @app.get("/api/app-version")

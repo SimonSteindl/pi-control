@@ -12,6 +12,17 @@ class _ChangelogDialog extends StatelessWidget {
 
   static const entries = [
     _ChangelogEntry(
+      version: '2.1.0',
+      date: '22. August 2026',
+      title: 'Flugwetter für Piloten',
+      highlights: [
+        'Neuer Flugwetter-Tab mit weltweiten METAR- und TAF-Daten.',
+        'Flughäfen lassen sich per ICAO-Code suchen und schnell wechseln.',
+        'Flugkategorie, Wind, Sicht, Wolken, Temperatur und QNH werden übersichtlich dargestellt.',
+        'Direkter Link zur Detailansicht auf metar-taf.com.',
+      ],
+    ),
+    _ChangelogEntry(
       version: '2.0.1',
       date: '19. August 2026',
       title: 'Bereit für kostenlose App-Stores',

@@ -1,0 +1,1 @@
+Neuer Flugwetter-Tab mit weltweiten METAR- und TAF-Meldungen, Flughafensuche per ICAO-Code, klarer VFR/IFR-Anzeige und direkten Detail-Links zu metar-taf.com.

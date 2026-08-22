@@ -18,6 +18,7 @@ import 'feature_hub_view.dart';
 import 'login_views.dart';
 import 'terminal_view.dart';
 import 'user_admin_view.dart';
+import 'weather_view.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -237,7 +238,7 @@ class _DashboardPageState extends State<DashboardPage> {
   String? androidUpdatePath;
   List<String> dashboardShortcuts = ['files', 'more', 'backups', 'search'];
 
-  static const clientAppVersion = '2.0.1';
+  static const clientAppVersion = '2.1.0';
 
   Future<http.Response> _apiGet(
     String path, {
@@ -1118,6 +1119,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
     final pageKeys = <String>[
       'dashboard',
+      'weather',
       if (widget.session.can('files_view')) 'files',
       if (widget.session.can('terminal_access')) 'terminal',
       if (widget.session.can('users_manage')) 'users',
@@ -1126,6 +1128,7 @@ class _DashboardPageState extends State<DashboardPage> {
     final currentPageIndex = selectedPageIndex.clamp(0, pageKeys.length - 1);
     final currentPage = pageKeys[currentPageIndex];
     final pageTitle = switch (currentPage) {
+      'weather' => english ? 'Flight weather' : 'Flugwetter',
       'files' => english ? 'Files' : 'Dateimanager',
       'terminal' => 'Terminal',
       'users' => english ? 'Admin panel' : 'Admin-Panel',
@@ -1790,6 +1793,15 @@ class _DashboardPageState extends State<DashboardPage> {
                     ],
                   ),
                 ),
+                AviationWeatherView(
+                  accentColor: widget.accentColor,
+                  english: english,
+                  apiGet: (path, headers) => _apiGet(
+                    path,
+                    headers: headers,
+                    timeout: const Duration(seconds: 15),
+                  ),
+                ),
                 if (widget.session.can('files_view'))
                   FileManagerView(
                     accentColor: widget.accentColor,
@@ -1837,6 +1849,11 @@ class _DashboardPageState extends State<DashboardPage> {
             icon: const Icon(Icons.space_dashboard_outlined),
             selectedIcon: const Icon(Icons.space_dashboard_rounded),
             label: english ? 'Overview' : 'Übersicht',
+          ),
+          NavigationDestination(
+            icon: const Icon(Icons.flight_outlined),
+            selectedIcon: const Icon(Icons.flight_rounded),
+            label: english ? 'Weather' : 'Flugwetter',
           ),
           if (widget.session.can('files_view'))
             NavigationDestination(

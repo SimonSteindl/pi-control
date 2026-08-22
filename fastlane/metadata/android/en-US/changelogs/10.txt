@@ -1,0 +1,1 @@
+New flight-weather tab with worldwide METAR and TAF reports, airport search by ICAO code, clear VFR/IFR status, and direct metar-taf.com detail links.

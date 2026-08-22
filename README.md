@@ -5,6 +5,9 @@ Pi. It combines system monitoring, file management, users and storage quotas,
 backups, a web terminal, media tools, OCR, encrypted vaults, Docker management,
 scheduled tasks, and secure remote access in one responsive app.
 
+The flight-weather tab shows worldwide METAR and TAF reports by ICAO code,
+including a direct link to the matching metar-taf.com detail page.
+
 ## Install
 
 - Web app: open your Pi Control HTTPS address in a browser. On iPhone or iPad,
