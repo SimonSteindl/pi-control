@@ -1,5 +1,7 @@
 # Pi Control
 
+Pi Control bietet neben Dashboard und Dateimanager einen integrierten WebDAV-Zugang unter `/webdav/`. Er verwendet dieselben Benutzerkonten, Ordnerzuweisungen, Berechtigungen und Speicherlimits wie die Weboberfläche.
+
 Pi Control is a self-hosted Flutter dashboard and private cloud for Raspberry
 Pi. It combines system monitoring, file management, users and storage quotas,
 backups, a web terminal, media tools, OCR, encrypted vaults, Docker management,

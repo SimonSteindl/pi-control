@@ -30,6 +30,7 @@ class FileManagerView extends StatefulWidget {
   final FileApiPost apiPost;
   final String Function() apiBase;
   final String authToken;
+  final String username;
   final bool canUpload;
   final bool canManage;
   final Color accentColor;
@@ -40,6 +41,7 @@ class FileManagerView extends StatefulWidget {
     required this.apiPost,
     required this.apiBase,
     required this.authToken,
+    required this.username,
     required this.canUpload,
     required this.canManage,
     required this.accentColor,
@@ -955,6 +957,77 @@ class _FileManagerViewState extends State<FileManagerView> {
         .showSnackBar(SnackBar(content: Text(message)));
   }
 
+  String get _webDavUrl {
+    final apiUri = Uri.parse(widget.apiBase());
+    final segments = apiUri.pathSegments.toList();
+    if (segments.isNotEmpty && segments.last == 'api') {
+      segments.removeLast();
+    }
+    return apiUri
+        .replace(pathSegments: [...segments, 'webdav', ''], query: null)
+        .toString();
+  }
+
+  Future<void> _openWebDavInfo() async {
+    final url = _webDavUrl;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        icon: const Icon(Icons.cloud_sync_outlined),
+        title: const Text('WebDAV-Zugriff'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Füge diese Adresse in deiner WebDAV-App oder als Netzlaufwerk hinzu. '
+                'Es gelten dieselben Ordnerrechte und Speicherlimits wie in Pi Control.',
+              ),
+              const SizedBox(height: 18),
+              const Text(
+                'Serveradresse',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 6),
+              SelectableText(url),
+              const SizedBox(height: 14),
+              const Text(
+                'Benutzername',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 6),
+              SelectableText(widget.username),
+              const SizedBox(height: 14),
+              const Text(
+                'Passwort: dein aktuelles Pi-Control-Passwort. Verwende unterwegs nur die HTTPS-Adresse.',
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton.icon(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: url));
+              if (dialogContext.mounted) {
+                ScaffoldMessenger.of(dialogContext).showSnackBar(
+                  const SnackBar(content: Text('WebDAV-Adresse kopiert.')),
+                );
+              }
+            },
+            icon: const Icon(Icons.copy_rounded),
+            label: const Text('Adresse kopieren'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Fertig'),
+          ),
+        ],
+      ),
+    );
+  }
+
   IconData _iconFor(PiFileEntry entry) {
     if (entry.isDirectory) return Icons.folder_rounded;
 
@@ -1282,6 +1355,11 @@ class _FileManagerViewState extends State<FileManagerView> {
                         onPressed: _openShares,
                         icon: const Icon(Icons.link_rounded),
                         label: const Text('Freigaben'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _openWebDavInfo,
+                        icon: const Icon(Icons.cloud_sync_outlined),
+                        label: const Text('WebDAV'),
                       ),
                       OutlinedButton.icon(
                         onPressed: _openFavorites,

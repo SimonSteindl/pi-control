@@ -238,7 +238,7 @@ class _DashboardPageState extends State<DashboardPage> {
   String? androidUpdatePath;
   List<String> dashboardShortcuts = ['files', 'more', 'backups', 'search'];
 
-  static const clientAppVersion = '2.1.0';
+  static const clientAppVersion = '2.2.0';
 
   Future<http.Response> _apiGet(
     String path, {
@@ -1806,6 +1806,7 @@ class _DashboardPageState extends State<DashboardPage> {
                   FileManagerView(
                     accentColor: widget.accentColor,
                     authToken: widget.session.token,
+                    username: widget.session.username,
                     canUpload: widget.session.can('files_upload'),
                     canManage: widget.session.can('files_manage'),
                     apiBase: () => widget.client.activeBase,

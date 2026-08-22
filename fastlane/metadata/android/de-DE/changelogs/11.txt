@@ -1,0 +1,1 @@
+WebDAV-Zugriff auf den NAS mit bestehenden Pi-Control-Benutzern, Ordnerrechten und Speicherlimits. Die persönliche Serveradresse lässt sich direkt im Dateimanager kopieren.

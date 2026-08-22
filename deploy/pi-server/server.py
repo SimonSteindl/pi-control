@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 
+import base64
+import datetime
 import hashlib
 import html
 import json
+import mimetypes
 import os
 import platform
 import secrets
@@ -18,10 +21,12 @@ import time
 import urllib.request
 import urllib.parse
 import zipfile
+import xml.etree.ElementTree as ET
+from email.utils import formatdate
 from functools import wraps
 from pathlib import Path
 
-from flask import Flask, g, jsonify, request, send_file, send_from_directory
+from flask import Flask, Response, g, jsonify, request, send_file, send_from_directory
 from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
@@ -44,7 +49,7 @@ BACKUP_DIRECTORY = Path(USB_PATH) / "Backups" / "Pi-Control"
 BACKUP_SCRIPT = BASE_DIR / "backup.sh"
 MAINTENANCE_FLAG = BASE_DIR / "maintenance.enabled"
 MAINTENANCE_PAGE = BASE_DIR / "maintenance.html"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 
 HISTORY_INTERVAL_SECONDS = 60
 HISTORY_MAX_POINTS = 24 * 60
@@ -73,6 +78,7 @@ BENCHMARK_HISTORY_MAX_POINTS = 50
 FILE_ROOT = Path(USB_PATH)
 FILE_OWNER_USER = "stoney22"
 file_operation_lock = threading.Lock()
+webdav_lock = threading.Lock()
 download_token_lock = threading.Lock()
 download_tokens = {}
 DOWNLOAD_TOKEN_LIFETIME_SECONDS = 60
@@ -2270,6 +2276,477 @@ def trash_directory(root):
     return directory
 
 
+WEBDAV_METHODS = [
+    "OPTIONS",
+    "PROPFIND",
+    "GET",
+    "HEAD",
+    "PUT",
+    "MKCOL",
+    "DELETE",
+    "MOVE",
+    "COPY",
+    "LOCK",
+    "UNLOCK",
+    "PROPPATCH",
+]
+WEBDAV_INTERNAL_NAMES = {
+    TRASH_DIRECTORY_NAME,
+    VERSIONS_DIRECTORY_NAME,
+    VAULTS_DIRECTORY_NAME,
+}
+DAV_NAMESPACE = "DAV:"
+ET.register_namespace("D", DAV_NAMESPACE)
+
+
+def webdav_response(message="", status=200, headers=None, content_type="text/plain; charset=utf-8"):
+    response = Response(message, status=status, content_type=content_type)
+    response.headers["DAV"] = "1, 2"
+    response.headers["MS-Author-Via"] = "DAV"
+    for key, value in (headers or {}).items():
+        response.headers[key] = value
+    return response
+
+
+def webdav_authentication_required():
+    authorization = request.headers.get("Authorization", "")
+    if not authorization.startswith("Basic "):
+        return None, webdav_response(
+            "WebDAV-Anmeldung erforderlich.",
+            401,
+            {"WWW-Authenticate": 'Basic realm="Pi Control WebDAV", charset="UTF-8"'},
+        )
+
+    try:
+        encoded = authorization[6:].strip()
+        decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+        username, password = decoded.split(":", 1)
+        username = username.strip()
+    except (ValueError, UnicodeDecodeError):
+        username, password = "", ""
+
+    if login_rate_limited(username):
+        return None, webdav_response("Zu viele Anmeldeversuche.", 429)
+
+    with auth_connection() as connection:
+        user = connection.execute(
+            "SELECT * FROM users WHERE username = ? COLLATE NOCASE",
+            (username,),
+        ).fetchone()
+
+    if (
+        user is None
+        or not user["is_active"]
+        or not check_password_hash(user["password_hash"], password)
+    ):
+        record_login_failure(username)
+        return None, webdav_response(
+            "Benutzername oder Passwort ist falsch.",
+            401,
+            {"WWW-Authenticate": 'Basic realm="Pi Control WebDAV", charset="UTF-8"'},
+        )
+
+    clear_login_failures(username)
+    if user["must_change_password"]:
+        return None, webdav_response(
+            "Bitte das Passwort zuerst in Pi Control ändern.", 403
+        )
+
+    permissions = (
+        ALL_PERMISSIONS
+        if user["is_admin"]
+        else parse_permissions(user["permissions"])
+    )
+    if "files_view" not in permissions:
+        return None, webdav_response("Keine Dateiberechtigung.", 403)
+
+    g.auth_user = user
+    g.auth_permissions = permissions
+    return user, None
+
+
+def webdav_has_permission(permission):
+    return permission in getattr(g, "auth_permissions", set())
+
+
+def webdav_relative_path(raw_path):
+    normalized = urllib.parse.unquote(str(raw_path or ""))
+    normalized = normalized.replace("\\", "/").strip("/")
+    if not normalized:
+        return ""
+    parts = normalized.split("/")
+    if any(
+        part in {"", ".", ".."} or part in WEBDAV_INTERNAL_NAMES
+        for part in parts
+    ):
+        raise ValueError("Ungültiger oder geschützter WebDAV-Pfad.")
+    return "/".join(parts)
+
+
+def webdav_resolve(raw_path):
+    return resolve_file_path(webdav_relative_path(raw_path))
+
+
+def webdav_href(root, path):
+    relative = relative_file_path(root, path)
+    encoded = "/".join(
+        urllib.parse.quote(part, safe="") for part in relative.split("/") if part
+    )
+    href = "/webdav/" + encoded
+    if path.is_dir() and not href.endswith("/"):
+        href += "/"
+    return href
+
+
+def webdav_etag(path, stat):
+    return f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+
+
+def webdav_property_response(root, path):
+    stat = path.stat()
+    response_element = ET.Element(f"{{{DAV_NAMESPACE}}}response")
+    ET.SubElement(
+        response_element, f"{{{DAV_NAMESPACE}}}href"
+    ).text = webdav_href(root, path)
+    propstat = ET.SubElement(response_element, f"{{{DAV_NAMESPACE}}}propstat")
+    prop = ET.SubElement(propstat, f"{{{DAV_NAMESPACE}}}prop")
+
+    ET.SubElement(prop, f"{{{DAV_NAMESPACE}}}displayname").text = (
+        path.name if path != root else str(g.auth_user["display_name"] or "Pi Control")
+    )
+    resource_type = ET.SubElement(prop, f"{{{DAV_NAMESPACE}}}resourcetype")
+    if path.is_dir():
+        ET.SubElement(resource_type, f"{{{DAV_NAMESPACE}}}collection")
+    else:
+        ET.SubElement(prop, f"{{{DAV_NAMESPACE}}}getcontentlength").text = str(
+            stat.st_size
+        )
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        ET.SubElement(prop, f"{{{DAV_NAMESPACE}}}getcontenttype").text = content_type
+
+    ET.SubElement(prop, f"{{{DAV_NAMESPACE}}}getlastmodified").text = formatdate(
+        stat.st_mtime, usegmt=True
+    )
+    ET.SubElement(prop, f"{{{DAV_NAMESPACE}}}creationdate").text = (
+        datetime.datetime.fromtimestamp(stat.st_ctime, datetime.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    ET.SubElement(prop, f"{{{DAV_NAMESPACE}}}getetag").text = webdav_etag(path, stat)
+    supported_lock = ET.SubElement(prop, f"{{{DAV_NAMESPACE}}}supportedlock")
+    lock_entry = ET.SubElement(supported_lock, f"{{{DAV_NAMESPACE}}}lockentry")
+    lock_scope = ET.SubElement(lock_entry, f"{{{DAV_NAMESPACE}}}lockscope")
+    ET.SubElement(lock_scope, f"{{{DAV_NAMESPACE}}}exclusive")
+    lock_type = ET.SubElement(lock_entry, f"{{{DAV_NAMESPACE}}}locktype")
+    ET.SubElement(lock_type, f"{{{DAV_NAMESPACE}}}write")
+    ET.SubElement(prop, f"{{{DAV_NAMESPACE}}}lockdiscovery")
+    ET.SubElement(propstat, f"{{{DAV_NAMESPACE}}}status").text = "HTTP/1.1 200 OK"
+    return response_element
+
+
+def webdav_multistatus(elements):
+    root = ET.Element(f"{{{DAV_NAMESPACE}}}multistatus")
+    for element in elements:
+        root.append(element)
+    payload = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    return webdav_response(payload, 207, content_type="application/xml; charset=utf-8")
+
+
+def webdav_tree_size(path):
+    if path.is_file():
+        return path.stat().st_size
+    return storage_used_bytes(path)
+
+
+def webdav_destination_path():
+    destination = request.headers.get("Destination", "").strip()
+    if not destination:
+        raise ValueError("Destination-Header fehlt.")
+    parsed = urllib.parse.urlsplit(destination)
+    path = urllib.parse.unquote(parsed.path)
+    if path == "/webdav":
+        relative = ""
+    elif path.startswith("/webdav/"):
+        relative = path[len("/webdav/"):]
+    else:
+        raise ValueError("WebDAV-Ziel liegt außerhalb des erlaubten Speichers.")
+    return webdav_resolve(relative)
+
+
+def webdav_remove_existing(path):
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def webdav_put(root, target):
+    if not webdav_has_permission("files_upload"):
+        return webdav_response("Keine Upload-Berechtigung.", 403)
+    if target.exists() and target.is_dir():
+        return webdav_response("Das Ziel ist ein Ordner.", 409)
+    if not target.parent.is_dir():
+        return webdav_response("Zielordner nicht gefunden.", 409)
+    if request.headers.get("Content-Range"):
+        return webdav_response("Teilweises Hochladen wird nicht unterstützt.", 501)
+
+    _, _, quota = assigned_file_root()
+    used_before = storage_used_bytes(root) if quota is not None else 0
+    old_size = target.stat().st_size if target.is_file() else 0
+    temporary = target.parent / f".{target.name}.webdav-{secrets.token_hex(8)}.part"
+    created = not target.exists()
+
+    try:
+        with file_operation_lock:
+            with temporary.open("wb") as output:
+                shutil.copyfileobj(request.stream, output, length=1024 * 1024)
+            upload_size = temporary.stat().st_size
+            if quota is not None and used_before - old_size + upload_size > quota:
+                return webdav_response("Speicherlimit überschritten.", 507)
+            if target.exists():
+                relative = relative_file_path(root, target)
+                version_target = version_directory(root, relative) / (
+                    f"{int(time.time())}-{target.name}"
+                )
+                shutil.copy2(target, version_target)
+            temporary.replace(target)
+            set_file_owner(target)
+        write_audit(
+            "webdav.put",
+            relative_file_path(root, target),
+            {"size": upload_size},
+        )
+        return webdav_response("", 201 if created else 204)
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def webdav_mkcol(root, target):
+    if not webdav_has_permission("files_manage"):
+        return webdav_response("Keine Verwaltungsberechtigung.", 403)
+    if request.content_length not in {None, 0}:
+        return webdav_response("MKCOL-Inhalt wird nicht unterstützt.", 415)
+    if target.exists():
+        return webdav_response("Der Ordner existiert bereits.", 405)
+    if not target.parent.is_dir():
+        return webdav_response("Übergeordneter Ordner fehlt.", 409)
+    target.mkdir()
+    set_file_owner(target, directory=True)
+    write_audit("webdav.mkdir", relative_file_path(root, target))
+    return webdav_response("", 201)
+
+
+def webdav_delete(root, target):
+    if not webdav_has_permission("files_manage"):
+        return webdav_response("Keine Verwaltungsberechtigung.", 403)
+    if target == root:
+        return webdav_response("Der Hauptordner kann nicht gelöscht werden.", 403)
+    if not target.exists():
+        return webdav_response("Nicht gefunden.", 404)
+
+    original_path = relative_file_path(root, target)
+    is_directory = target.is_dir()
+    trash_name = f"{int(time.time())}-{secrets.token_hex(8)}-{target.name}"
+    trashed_target = trash_directory(root) / trash_name
+    with file_operation_lock:
+        target.rename(trashed_target)
+        try:
+            with auth_connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO trash_items (
+                        user_id, root_path, trash_name, original_path,
+                        display_name, is_directory, deleted_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        current_user_id(), str(root), trash_name,
+                        original_path, target.name, int(is_directory),
+                        int(time.time()),
+                    ),
+                )
+        except Exception:
+            trashed_target.rename(target)
+            raise
+    write_audit("webdav.delete", original_path)
+    return webdav_response("", 204)
+
+
+def webdav_copy_or_move(root, source, move=False):
+    if not webdav_has_permission("files_manage"):
+        return webdav_response("Keine Verwaltungsberechtigung.", 403)
+    if source == root:
+        return webdav_response("Der Hauptordner kann nicht verschoben werden.", 403)
+    if not source.exists():
+        return webdav_response("Quelle nicht gefunden.", 404)
+
+    destination_root, destination = webdav_destination_path()
+    if destination_root != root:
+        return webdav_response("Ungültiges WebDAV-Ziel.", 403)
+    if source == destination:
+        return webdav_response("", 204)
+    if not destination.parent.is_dir():
+        return webdav_response("Zielordner nicht gefunden.", 409)
+    if source.is_dir():
+        try:
+            destination.relative_to(source)
+            return webdav_response("Ein Ordner kann nicht in sich selbst kopiert werden.", 409)
+        except ValueError:
+            pass
+
+    existed = destination.exists()
+    if existed and request.headers.get("Overwrite", "T").upper() == "F":
+        return webdav_response("Das Ziel existiert bereits.", 412)
+
+    if not move:
+        _, _, quota = assigned_file_root()
+        if quota is not None:
+            destination_size = webdav_tree_size(destination) if existed else 0
+            projected = (
+                storage_used_bytes(root)
+                - destination_size
+                + webdav_tree_size(source)
+            )
+            if projected > quota:
+                return webdav_response("Speicherlimit überschritten.", 507)
+
+    with file_operation_lock:
+        if existed:
+            webdav_remove_existing(destination)
+        if move:
+            source.rename(destination)
+        elif source.is_dir():
+            shutil.copytree(source, destination)
+        else:
+            shutil.copy2(source, destination)
+        set_file_owner(destination, directory=destination.is_dir())
+
+    action = "webdav.move" if move else "webdav.copy"
+    write_audit(
+        action,
+        relative_file_path(root, source),
+        {"destination": relative_file_path(root, destination)},
+    )
+    return webdav_response("", 204 if existed else 201)
+
+
+def webdav_lock_response(root, target):
+    if not webdav_has_permission("files_manage"):
+        return webdav_response("Keine Verwaltungsberechtigung.", 403)
+    if not target.exists():
+        if not target.parent.is_dir():
+            return webdav_response("Zielordner nicht gefunden.", 409)
+        target.touch()
+        set_file_owner(target)
+
+    token = f"opaquelocktoken:{secrets.token_urlsafe(24)}"
+    prop = ET.Element(f"{{{DAV_NAMESPACE}}}prop")
+    discovery = ET.SubElement(prop, f"{{{DAV_NAMESPACE}}}lockdiscovery")
+    active = ET.SubElement(discovery, f"{{{DAV_NAMESPACE}}}activelock")
+    lock_type = ET.SubElement(active, f"{{{DAV_NAMESPACE}}}locktype")
+    ET.SubElement(lock_type, f"{{{DAV_NAMESPACE}}}write")
+    scope = ET.SubElement(active, f"{{{DAV_NAMESPACE}}}lockscope")
+    ET.SubElement(scope, f"{{{DAV_NAMESPACE}}}exclusive")
+    ET.SubElement(active, f"{{{DAV_NAMESPACE}}}depth").text = "Infinity"
+    ET.SubElement(active, f"{{{DAV_NAMESPACE}}}timeout").text = "Second-3600"
+    lock_token = ET.SubElement(active, f"{{{DAV_NAMESPACE}}}locktoken")
+    ET.SubElement(lock_token, f"{{{DAV_NAMESPACE}}}href").text = token
+    lock_root = ET.SubElement(active, f"{{{DAV_NAMESPACE}}}lockroot")
+    ET.SubElement(lock_root, f"{{{DAV_NAMESPACE}}}href").text = webdav_href(root, target)
+    payload = ET.tostring(prop, encoding="utf-8", xml_declaration=True)
+    return webdav_response(
+        payload,
+        200,
+        {"Lock-Token": f"<{token}>"},
+        "application/xml; charset=utf-8",
+    )
+
+
+def webdav_proppatch(root, target):
+    if not webdav_has_permission("files_manage"):
+        return webdav_response("Keine Verwaltungsberechtigung.", 403)
+    if not target.exists():
+        return webdav_response("Nicht gefunden.", 404)
+    return webdav_multistatus([webdav_property_response(root, target)])
+
+
+@app.route("/webdav", defaults={"dav_path": ""}, methods=WEBDAV_METHODS)
+@app.route("/webdav/", defaults={"dav_path": ""}, methods=WEBDAV_METHODS)
+@app.route("/webdav/<path:dav_path>", methods=WEBDAV_METHODS)
+def webdav(dav_path):
+    if request.method == "OPTIONS":
+        return webdav_response(
+            "",
+            200,
+            {
+                "Allow": ", ".join(WEBDAV_METHODS),
+                "Public": ", ".join(WEBDAV_METHODS),
+            },
+        )
+
+    _, auth_error = webdav_authentication_required()
+    if auth_error is not None:
+        return auth_error
+
+    try:
+        root, target = webdav_resolve(dav_path)
+        method = request.method
+
+        if method == "PROPFIND":
+            if not target.exists():
+                return webdav_response("Nicht gefunden.", 404)
+            depth = request.headers.get("Depth", "1").strip().lower()
+            if depth not in {"0", "1"}:
+                return webdav_response("Nur Depth 0 und 1 werden unterstützt.", 403)
+            paths = [target]
+            if depth == "1" and target.is_dir():
+                paths.extend(
+                    child
+                    for child in sorted(target.iterdir(), key=lambda path: path.name.casefold())
+                    if not child.is_symlink() and not hidden_file_entry(child)
+                )
+            return webdav_multistatus(
+                [webdav_property_response(root, path) for path in paths]
+            )
+
+        if method in {"GET", "HEAD"}:
+            if not target.exists():
+                return webdav_response("Nicht gefunden.", 404)
+            if not target.is_file():
+                return webdav_response("WebDAV-Ordner müssen mit PROPFIND geöffnet werden.", 405)
+            return send_file(target, conditional=True)
+
+        with webdav_lock:
+            if method == "PUT":
+                return webdav_put(root, target)
+            if method == "MKCOL":
+                return webdav_mkcol(root, target)
+            if method == "DELETE":
+                return webdav_delete(root, target)
+            if method == "COPY":
+                return webdav_copy_or_move(root, target, move=False)
+            if method == "MOVE":
+                return webdav_copy_or_move(root, target, move=True)
+            if method == "LOCK":
+                return webdav_lock_response(root, target)
+            if method == "UNLOCK":
+                return webdav_response("", 204)
+            if method == "PROPPATCH":
+                return webdav_proppatch(root, target)
+
+        return webdav_response("Methode nicht unterstützt.", 405)
+    except FileNotFoundError:
+        return webdav_response("Nicht gefunden.", 404)
+    except (RuntimeError, ValueError) as exc:
+        return webdav_response(str(exc), 409)
+    except OSError as exc:
+        return webdav_response(f"WebDAV-Dateifehler: {exc}", 409)
+
+
 def resolve_stored_file(root_path, relative_path):
     root = Path(root_path).resolve(strict=True)
     candidate = (root / str(relative_path or "")).resolve(strict=False)
@@ -3741,7 +4218,7 @@ def fetch_aviation_weather_product(product, icao):
         headers={
             "Accept": "application/json",
             "User-Agent": (
-                "Pi-Control/2.1.0 "
+                "Pi-Control/2.2.0 "
                 "(https://github.com/SimonSteindl/pi-control)"
             ),
         },

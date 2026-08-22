@@ -12,6 +12,17 @@ class _ChangelogDialog extends StatelessWidget {
 
   static const entries = [
     _ChangelogEntry(
+      version: '2.2.0',
+      date: '22. August 2026',
+      title: 'NAS als WebDAV-Laufwerk',
+      highlights: [
+        'Dateien lassen sich jetzt über WebDAV in kompatiblen Datei-Apps und am Computer öffnen.',
+        'Pi-Control-Benutzer, Ordnerrechte und Speicherlimits gelten automatisch auch für WebDAV.',
+        'Upload, Download, Ordner, Umbenennen, Verschieben, Kopieren und Papierkorb werden unterstützt.',
+        'Die persönliche WebDAV-Adresse kann direkt im Dateimanager angezeigt und kopiert werden.',
+      ],
+    ),
+    _ChangelogEntry(
       version: '2.1.0',
       date: '22. August 2026',
       title: 'Flugwetter für Piloten',

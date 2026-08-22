@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import base64
 import importlib.util
 import io
 import json
@@ -28,8 +29,24 @@ def auth_header(token):
     return {"Authorization": f"Bearer {token}"}
 
 
+def webdav_auth_header(username, password, **headers):
+    credentials = base64.b64encode(
+        f"{username}:{password}".encode("utf-8")
+    ).decode("ascii")
+    return {"Authorization": f"Basic {credentials}", **headers}
+
+
 def main():
     server = load_server()
+    original_auth_connection = server.auth_connection
+    opened_connections = []
+
+    def tracked_auth_connection():
+        connection = original_auth_connection()
+        opened_connections.append(connection)
+        return connection
+
+    server.auth_connection = tracked_auth_connection
 
     with tempfile.TemporaryDirectory(prefix="pi-control-auth-test-") as temp:
         temp_path = Path(temp)
@@ -61,6 +78,7 @@ def main():
         maintenance_page = client.get("/")
         assert maintenance_page.status_code == 503
         assert b"Wartung" in maintenance_page.data
+        maintenance_page.close()
         server.MAINTENANCE_FLAG.unlink()
 
         login = client.post("/api/auth/login", json=credentials)
@@ -245,6 +263,7 @@ def main():
         )
         assert shared_file.status_code == 200, shared_file.data
         assert shared_file.data == b"abc"
+        shared_file.close()
 
         shares = client.get(
             "/api/files/shares",
@@ -276,6 +295,7 @@ def main():
         )
         assert preview.status_code == 200, preview.data
         assert "attachment" not in preview.headers.get("Content-Disposition", "")
+        preview.close()
 
         nested_folder = client.post(
             "/api/files/folder",
@@ -352,6 +372,108 @@ def main():
             headers=auth_header(viewer_token),
         ).get_json()["items"] == []
 
+        assert client.open(
+            "/webdav/",
+            method="OPTIONS",
+        ).status_code == 200
+        assert client.open(
+            "/webdav/",
+            method="PROPFIND",
+            headers={"Depth": "0"},
+        ).status_code == 401
+
+        dav_headers = webdav_auth_header(
+            "viewer",
+            "Auth-Test-Viewer-Neu-2026!",
+        )
+        dav_root = client.open(
+            "/webdav/",
+            method="PROPFIND",
+            headers={**dav_headers, "Depth": "1"},
+        )
+        assert dav_root.status_code == 207, dav_root.data
+        assert b"Dokumente" in dav_root.data
+        assert b"outside.txt" not in dav_root.data
+        assert b".pi-control-trash" not in dav_root.data
+
+        dav_folder = client.open(
+            "/webdav/WebDAV-Test",
+            method="MKCOL",
+            headers=dav_headers,
+        )
+        assert dav_folder.status_code == 201, dav_folder.data
+        dav_upload = client.open(
+            "/webdav/WebDAV-Test/hallo.txt",
+            method="PUT",
+            headers=dav_headers,
+            data=b"abc",
+        )
+        assert dav_upload.status_code == 201, dav_upload.data
+        assert server.FILE_ROOT.joinpath(
+            "users/viewer/WebDAV-Test/hallo.txt"
+        ).read_bytes() == b"abc"
+        dav_download = client.get(
+            "/webdav/WebDAV-Test/hallo.txt",
+            headers=dav_headers,
+        )
+        assert dav_download.status_code == 200, dav_download.data
+        assert dav_download.data == b"abc"
+        dav_download.close()
+
+        dav_quota = client.open(
+            "/webdav/WebDAV-Test/zu-gross.txt",
+            method="PUT",
+            headers=dav_headers,
+            data=b"de",
+        )
+        assert dav_quota.status_code == 507, dav_quota.data
+        assert not server.FILE_ROOT.joinpath(
+            "users/viewer/WebDAV-Test/zu-gross.txt"
+        ).exists()
+
+        dav_move = client.open(
+            "/webdav/WebDAV-Test/hallo.txt",
+            method="MOVE",
+            headers={
+                **dav_headers,
+                "Destination": "https://localhost/webdav/WebDAV-Test/umbenannt.txt",
+            },
+        )
+        assert dav_move.status_code == 201, dav_move.data
+        assert server.FILE_ROOT.joinpath(
+            "users/viewer/WebDAV-Test/umbenannt.txt"
+        ).read_bytes() == b"abc"
+        dav_delete = client.open(
+            "/webdav/WebDAV-Test/umbenannt.txt",
+            method="DELETE",
+            headers=dav_headers,
+        )
+        assert dav_delete.status_code == 204, dav_delete.data
+        assert not server.FILE_ROOT.joinpath(
+            "users/viewer/WebDAV-Test/umbenannt.txt"
+        ).exists()
+
+        protected_webdav = client.open(
+            "/webdav/.pi-control-trash",
+            method="PROPFIND",
+            headers={**dav_headers, "Depth": "0"},
+        )
+        assert protected_webdav.status_code == 409, protected_webdav.data
+
+        with server.auth_connection() as connection:
+            connection.execute(
+                "UPDATE users SET permissions = ? WHERE username = ?",
+                (json.dumps(["files_view"]), "viewer"),
+            )
+        connection.close()
+        read_only_upload = client.open(
+            "/webdav/WebDAV-Test/verboten.txt",
+            method="PUT",
+            headers=dav_headers,
+            data=b"x",
+        )
+        assert read_only_upload.status_code == 403, read_only_upload.data
+
         traversal = client.get(
             "/api/files?path=../",
             headers=auth_header(viewer_token),
@@ -375,6 +497,12 @@ def main():
             headers=auth_header(viewer_token),
             json={"command": "id"},
         ).status_code == 403
+
+        for opened_connection in opened_connections:
+            try:
+                opened_connection.close()
+            except Exception:
+                pass
 
     print("AUTH_API_OK")
 

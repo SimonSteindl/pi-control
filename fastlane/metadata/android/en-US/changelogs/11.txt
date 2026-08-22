@@ -1,0 +1,1 @@
+WebDAV access to the NAS using existing Pi Control users, folder permissions, and storage quotas. The personal server address can be copied directly from the file manager.
