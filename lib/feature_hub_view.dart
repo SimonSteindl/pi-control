@@ -63,6 +63,8 @@ class _GalleryTabState extends State<_GalleryTab> {
   List<Map<String, dynamic>> items = [];
   bool loading = true;
   bool backingUp = false;
+  int backupCompleted = 0;
+  int backupTotal = 0;
   String? error;
   final Map<String, Future<String?>> thumbnails = {};
 
@@ -94,6 +96,10 @@ class _GalleryTabState extends State<_GalleryTab> {
                   .map((e) => Map<String, dynamic>.from(e))
                   .toList()
             : [];
+        final visiblePaths = items
+            .map((item) => item['path'].toString())
+            .toSet();
+        thumbnails.removeWhere((path, _) => !visiblePaths.contains(path));
         loading = false;
       });
     } catch (e) {
@@ -163,48 +169,127 @@ class _GalleryTabState extends State<_GalleryTab> {
   }
 
   Future<void> backupPhoneMedia() async {
-    final selected = await ImagePicker().pickMultipleMedia(imageQuality: 95);
+    final photosOnly = await showModalBottomSheet<bool>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.add_photo_alternate_outlined),
+              title: const Text('Fotos auswählen'),
+              subtitle: const Text('Mehrere Bilder vom Handy sichern'),
+              onTap: () => Navigator.pop(context, true),
+            ),
+            ListTile(
+              leading: const Icon(Icons.perm_media_outlined),
+              title: const Text('Fotos und Videos auswählen'),
+              subtitle: const Text('Bilder und Videos gemeinsam sichern'),
+              onTap: () => Navigator.pop(context, false),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (photosOnly == null) return;
+
+    final picker = ImagePicker();
+    final selected = photosOnly
+        ? await picker.pickMultiImage()
+        : await picker.pickMultipleMedia();
     if (selected.isEmpty || !mounted) return;
-    setState(() => backingUp = true);
+    setState(() {
+      backingUp = true;
+      backupCompleted = 0;
+      backupTotal = selected.length;
+    });
+
+    var saved = 0;
+    String? destination;
     try {
-      final request = http.MultipartRequest(
-        'POST',
-        Uri.parse('${widget.client.activeBase}/mobile-backup'),
-      );
-      final token = widget.client.token;
-      if (token != null) request.headers['Authorization'] = 'Bearer $token';
+      const maximumBatchBytes = 220 * 1024 * 1024;
+      const maximumBatchFiles = 25;
+      var batch = <_BackupFile>[];
+      var batchBytes = 0;
+
+      Future<void> sendBatch() async {
+        if (batch.isEmpty) return;
+        final result = await _uploadMobileBackupBatch(batch);
+        saved += (result['saved'] as num?)?.toInt() ?? batch.length;
+        destination = result['path']?.toString() ?? destination;
+        batch = <_BackupFile>[];
+        batchBytes = 0;
+        if (mounted) setState(() => backupCompleted = saved);
+      }
+
       for (final file in selected) {
-        request.files.add(
-          http.MultipartFile(
-            'files',
-            file.openRead(),
-            await file.length(),
-            filename: file.name,
-          ),
-        );
+        final length = await file.length();
+        if (length > maximumBatchBytes) {
+          throw StateError('${file.name} ist größer als 220 MB.');
+        }
+        if (batch.isNotEmpty &&
+            (batch.length >= maximumBatchFiles ||
+                batchBytes + length > maximumBatchBytes)) {
+          await sendBatch();
+        }
+        batch.add(_BackupFile(file, length));
+        batchBytes += length;
       }
-      final response = await http.Response.fromStream(
-        await request.send().timeout(const Duration(minutes: 10)),
-      );
-      if (response.statusCode != 200) {
-        throw widget.client.responseException(response);
-      }
+      await sendBatch();
+
       await load();
       if (mounted) {
+        final location = destination == null ? '.' : ': $destination';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('${selected.length} Medien wurden gesichert.'),
+            content: Text(
+              '$saved Medien wurden auf dem USB-Stick gespeichert$location',
+            ),
           ),
         );
       }
     } catch (error) {
       if (mounted) {
+        final prefix = saved == 0
+            ? ''
+            : '$saved Medien wurden bereits gesichert. ';
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(error.toString())));
+            .showSnackBar(SnackBar(content: Text('$prefix$error')));
       }
     } finally {
-      if (mounted) setState(() => backingUp = false);
+      if (mounted) {
+        setState(() {
+          backingUp = false;
+          backupCompleted = 0;
+          backupTotal = 0;
+        });
+      }
     }
+  }
+
+  Future<Map<String, dynamic>> _uploadMobileBackupBatch(
+    List<_BackupFile> files,
+  ) async {
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('${widget.client.activeBase}/mobile-backup'),
+    );
+    for (final file in files) {
+      request.files.add(
+        http.MultipartFile(
+          'files',
+          file.file.openRead(),
+          file.length,
+          filename: file.file.name,
+        ),
+      );
+    }
+    final response = await http.Response.fromStream(
+      await widget.client.send(request),
+    );
+    if (response.statusCode != 200) {
+      throw widget.client.responseException(response);
+    }
+    return widget.client.decodeObject(response);
   }
 
   Future<void> addToPlaylist(Map<String, dynamic> item) async {
@@ -352,15 +437,6 @@ class _GalleryTabState extends State<_GalleryTab> {
 
   @override
   Widget build(BuildContext context) {
-    if (loading) return const Center(child: CircularProgressIndicator());
-    if (error != null) return _ErrorPane(message: error!, onRetry: load);
-    if (items.isEmpty) {
-      return const _EmptyPane(
-        icon: Icons.photo_library_outlined,
-        title: 'Noch keine Medien',
-        subtitle: 'Fotos, Videos und Musik erscheinen automatisch hier.',
-      );
-    }
     return Scaffold(
       floatingActionButton: Column(
         mainAxisSize: MainAxisSize.min,
@@ -382,78 +458,116 @@ class _GalleryTabState extends State<_GalleryTab> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.backup_rounded),
-            label: Text(backingUp ? 'Sichert …' : 'Handy sichern'),
+            label: Text(
+              backingUp
+                  ? 'Sichert $backupCompleted/$backupTotal'
+                  : 'Handy sichern',
+            ),
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: load,
-        child: GridView.builder(
-          padding: const EdgeInsets.all(16),
-          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: 220,
-            mainAxisExtent: 180,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-          ),
-          itemCount: items.length,
-          itemBuilder: (context, index) {
-            final item = items[index];
-            final name = item['name']?.toString() ?? 'Medium';
-            return Card(
-              clipBehavior: Clip.antiAlias,
-              child: InkWell(
-                onTap: () => openItem(item),
-                onLongPress: () => addToPlaylist(item),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(
-                      child: isImage(name)
-                          ? FutureBuilder<String?>(
-                              future: thumbnails.putIfAbsent(
-                                item['path'].toString(),
-                                () => previewUrl(item['path'].toString()),
-                              ),
-                              builder: (context, snapshot) =>
-                                  snapshot.data == null
-                                  ? ColoredBox(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .primaryContainer,
-                                      child: Icon(iconFor(name), size: 54),
-                                    )
-                                  : Image.network(
-                                      snapshot.data!,
-                                      fit: BoxFit.cover,
-                                      width: double.infinity,
+      body: loading
+          ? const Center(child: CircularProgressIndicator())
+          : error != null
+          ? _ErrorPane(message: error!, onRetry: load)
+          : items.isEmpty
+          ? const _EmptyPane(
+              icon: Icons.photo_library_outlined,
+              title: 'Noch keine Medien',
+              subtitle: 'Tippe auf „Handy sichern“, um Fotos direkt auf dem USB-Stick zu speichern.',
+            )
+          : RefreshIndicator(
+              onRefresh: load,
+              child: GridView.builder(
+                padding: const EdgeInsets.all(16),
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 220,
+                  mainAxisExtent: 180,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 12,
+                ),
+                itemCount: items.length,
+                itemBuilder: (context, index) {
+                  final item = items[index];
+                  final name = item['name']?.toString() ?? 'Medium';
+                  return Card(
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      onTap: () => openItem(item),
+                      onLongPress: () => addToPlaylist(item),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            child: isImage(name)
+                                ? FutureBuilder<String?>(
+                                    future: thumbnails.putIfAbsent(
+                                      item['path'].toString(),
+                                      () => previewUrl(item['path'].toString()),
                                     ),
-                            )
-                          : ColoredBox(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .primaryContainer,
-                              child: Icon(iconFor(name), size: 54),
+                                    builder: (context, snapshot) =>
+                                        snapshot.data == null
+                                        ? ColoredBox(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .primaryContainer,
+                                            child: Icon(
+                                              iconFor(name),
+                                              size: 54,
+                                            ),
+                                          )
+                                        : Image.network(
+                                            snapshot.data!,
+                                            fit: BoxFit.cover,
+                                            width: double.infinity,
+                                            cacheWidth: 640,
+                                            errorBuilder:
+                                                (context, error, stackTrace) =>
+                                                    ColoredBox(
+                                                      color: Theme.of(context)
+                                                          .colorScheme
+                                                          .primaryContainer,
+                                                      child: Icon(
+                                                        iconFor(name),
+                                                        size: 54,
+                                                      ),
+                                                    ),
+                                          ),
+                                  )
+                                : ColoredBox(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .primaryContainer,
+                                    child: Icon(iconFor(name), size: 54),
+                                  ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Text(
+                              name,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Text(
-                        name,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
-                ),
+                  );
+                },
               ),
-            );
-          },
-        ),
-      ),
+            ),
     );
   }
+}
+
+class _BackupFile {
+  final XFile file;
+  final int length;
+
+  const _BackupFile(this.file, this.length);
 }
 
 class _OrganizerTab extends StatefulWidget {
@@ -589,8 +703,6 @@ class _OrganizerTabState extends State<_OrganizerTab> {
         'POST',
         Uri.parse('${widget.client.activeBase}/ocr'),
       );
-      final token = widget.client.token;
-      if (token != null) request.headers['Authorization'] = 'Bearer $token';
       request.files.add(
         http.MultipartFile(
           'file',
@@ -600,7 +712,7 @@ class _OrganizerTabState extends State<_OrganizerTab> {
         ),
       );
       final response = await http.Response.fromStream(
-        await request.send().timeout(const Duration(minutes: 2)),
+        await widget.client.send(request, timeout: const Duration(minutes: 2)),
       );
       if (!mounted) return;
       Navigator.pop(context);

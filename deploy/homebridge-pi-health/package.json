@@ -1,0 +1,16 @@
+{
+  "name": "homebridge-pi-control-health",
+  "version": "1.0.0",
+  "description": "Lightweight Apple Home health sensors for Pi Control",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "homebridge": ">=1.6.0"
+  },
+  "keywords": [
+    "homebridge-plugin"
+  ],
+  "license": "MIT"
+}

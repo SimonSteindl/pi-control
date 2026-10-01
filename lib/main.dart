@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:image_picker/image_picker.dart';
 
 import 'changelog_view.dart';
 import 'backup_view.dart';
@@ -16,12 +17,19 @@ import 'auth.dart';
 import 'file_manager_view.dart';
 import 'feature_hub_view.dart';
 import 'login_views.dart';
+import 'layout_system.dart';
 import 'terminal_view.dart';
 import 'user_admin_view.dart';
 import 'weather_view.dart';
+import 'widget_background.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await initializePiControlWidgetUpdates();
+  } catch (_) {
+    // Ein Hintergrund-Widget darf den App-Start nicht verhindern.
+  }
   runApp(const PiControlApp());
 }
 
@@ -34,6 +42,7 @@ class PiControlApp extends StatefulWidget {
 
 class _PiControlAppState extends State<PiControlApp> {
   Color accentColor = Colors.blue;
+  PiLayoutStyle layoutStyle = PiLayoutStyle.aurora;
   final PiApiClient client = PiApiClient();
   AuthSession? session;
   bool restoringSession = true;
@@ -44,6 +53,25 @@ class _PiControlAppState extends State<PiControlApp> {
     super.initState();
     restoreSession();
     loadLanguage();
+    loadAppearance();
+  }
+
+  Future<void> loadAppearance() async {
+    final preferences = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      layoutStyle = piLayoutStyleFromKey(
+        preferences.getString('pi_control_layout_style'),
+      );
+      final accentValue = preferences.getInt('pi_control_accent_color');
+      if (accentValue != null) accentColor = Color(accentValue);
+    });
+  }
+
+  Future<void> changeLayoutStyle(PiLayoutStyle style) async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString('pi_control_layout_style', style.storageKey);
+    if (mounted) setState(() => layoutStyle = style);
   }
 
   Future<void> loadLanguage() async {
@@ -74,10 +102,10 @@ class _PiControlAppState extends State<PiControlApp> {
     });
   }
 
-  void changeAccent(Color color) {
-    setState(() {
-      accentColor = color;
-    });
+  Future<void> changeAccent(Color color) async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setInt('pi_control_accent_color', color.toARGB32());
+    if (mounted) setState(() => accentColor = color);
   }
 
   Future<void> logout() async {
@@ -89,6 +117,12 @@ class _PiControlAppState extends State<PiControlApp> {
   }
 
   @override
+  void dispose() {
+    client.close();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
@@ -96,34 +130,38 @@ class _PiControlAppState extends State<PiControlApp> {
       locale: appLocale,
       supportedLocales: const [Locale('de'), Locale('en')],
       localizationsDelegates: GlobalMaterialLocalizations.delegates,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: accentColor,
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFF0A0F1C),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFF0A0F1C),
-          surfaceTintColor: Colors.transparent,
-          centerTitle: false,
-        ),
-        cardTheme: CardThemeData(
-          elevation: 0,
-          color: const Color(0xFF121A2A),
-          surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(22),
-            side: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+      theme: buildPiLayoutTheme(
+        ThemeData(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: accentColor,
+            brightness: Brightness.dark,
+          ),
+          useMaterial3: true,
+          scaffoldBackgroundColor: const Color(0xFF0A0F1C),
+          appBarTheme: const AppBarTheme(
+            backgroundColor: Color(0xFF0A0F1C),
+            surfaceTintColor: Colors.transparent,
+            centerTitle: false,
+          ),
+          cardTheme: CardThemeData(
+            elevation: 0,
+            color: const Color(0xFF121A2A),
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(22),
+              side: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+            ),
+          ),
+          navigationBarTheme: NavigationBarThemeData(
+            backgroundColor: const Color(0xFF0E1524),
+            indicatorColor: accentColor.withValues(alpha: 0.22),
+            labelTextStyle: const WidgetStatePropertyAll(
+              TextStyle(fontWeight: FontWeight.w700),
+            ),
           ),
         ),
-        navigationBarTheme: NavigationBarThemeData(
-          backgroundColor: const Color(0xFF0E1524),
-          indicatorColor: accentColor.withValues(alpha: 0.22),
-          labelTextStyle: const WidgetStatePropertyAll(
-            TextStyle(fontWeight: FontWeight.w700),
-          ),
-        ),
+        layoutStyle,
+        accentColor,
       ),
       home: restoringSession
           ? const _SessionRestoreScreen()
@@ -160,6 +198,8 @@ class _PiControlAppState extends State<PiControlApp> {
               },
               onLogout: logout,
               onLanguageChanged: changeLanguage,
+              layoutStyle: layoutStyle,
+              onLayoutChanged: changeLayoutStyle,
             ),
     );
   }
@@ -195,6 +235,8 @@ class DashboardPage extends StatefulWidget {
   final ValueChanged<AuthSession> onSessionUpdated;
   final VoidCallback onLogout;
   final ValueChanged<Locale> onLanguageChanged;
+  final PiLayoutStyle layoutStyle;
+  final ValueChanged<PiLayoutStyle> onLayoutChanged;
 
   const DashboardPage({
     super.key,
@@ -205,13 +247,16 @@ class DashboardPage extends StatefulWidget {
     required this.onSessionUpdated,
     required this.onLogout,
     required this.onLanguageChanged,
+    required this.layoutStyle,
+    required this.onLayoutChanged,
   });
 
   @override
   State<DashboardPage> createState() => _DashboardPageState();
 }
 
-class _DashboardPageState extends State<DashboardPage> {
+class _DashboardPageState extends State<DashboardPage>
+    with WidgetsBindingObserver {
   String get activeConnectionName => widget.client.connectionName;
 
   Map<String, dynamic>? data;
@@ -222,6 +267,10 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Timer? refreshTimer;
   Timer? historyTimer;
+  bool _dataRequestInFlight = false;
+  bool _historyRequestInFlight = false;
+  bool _benchmarkHistoryRequestInFlight = false;
+  DateTime? _lastDashboardCacheWrite;
 
   int? latencyMs;
   DateTime? lastUpdated;
@@ -232,13 +281,14 @@ class _DashboardPageState extends State<DashboardPage> {
   List<Map<String, dynamic>> benchmarkHistory = [];
 
   List<HistoryPoint> history = [];
+  ImageProvider? _profilePicture;
   int selectedPageIndex = 0;
   bool showUpdateNotice = true;
   String? availableAppVersion;
   String? androidUpdatePath;
   List<String> dashboardShortcuts = ['files', 'more', 'backups', 'search'];
 
-  static const clientAppVersion = '2.2.0';
+  static const clientAppVersion = '2.3.1';
 
   Future<http.Response> _apiGet(
     String path, {
@@ -273,23 +323,55 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     checkAppVersion();
     loadCachedDashboard();
     loadDashboardLayout();
+    loadProfilePicture();
     if (widget.session.can('dashboard_view')) {
       loadAll();
-
-      refreshTimer = Timer.periodic(
-        const Duration(seconds: 5),
-        (_) => loadData(),
-      );
-
-      historyTimer = Timer.periodic(
-        const Duration(minutes: 1),
-        (_) => loadHistory(),
-      );
+      _startRefreshTimers();
     } else {
       loading = false;
+    }
+  }
+
+  void _startRefreshTimers() {
+    refreshTimer?.cancel();
+    historyTimer?.cancel();
+    final isHandheld =
+        !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS);
+    final dashboardRefreshInterval = Duration(seconds: isHandheld ? 15 : 5);
+    refreshTimer = Timer.periodic(dashboardRefreshInterval, (_) {
+      if (selectedPageIndex == 0) loadData();
+    });
+    historyTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (selectedPageIndex == 0) loadHistory();
+    });
+  }
+
+  void _stopRefreshTimers() {
+    refreshTimer?.cancel();
+    historyTimer?.cancel();
+    refreshTimer = null;
+    historyTimer = null;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!widget.session.can('dashboard_view')) return;
+    if (state == AppLifecycleState.resumed) {
+      _startRefreshTimers();
+      if (selectedPageIndex == 0) {
+        loadData();
+        loadHistory();
+      }
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      _stopRefreshTimers();
     }
   }
 
@@ -401,8 +483,8 @@ class _DashboardPageState extends State<DashboardPage> {
 
   @override
   void dispose() {
-    refreshTimer?.cancel();
-    historyTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _stopRefreshTimers();
     super.dispose();
   }
 
@@ -431,6 +513,128 @@ class _DashboardPageState extends State<DashboardPage> {
     if (saved != null && saved.isNotEmpty && mounted) {
       setState(() => dashboardShortcuts = saved);
     }
+  }
+
+  String get _profilePictureKey =>
+      'pi_control_profile_picture_${widget.session.username.toLowerCase()}';
+
+  Future<void> loadProfilePicture() async {
+    final preferences = await SharedPreferences.getInstance();
+    final saved = preferences.getString(_profilePictureKey);
+    ImageProvider? picture;
+    try {
+      if (saved != null) picture = MemoryImage(base64Decode(saved));
+    } catch (_) {
+      await preferences.remove(_profilePictureKey);
+    }
+    if (mounted) setState(() => _profilePicture = picture);
+  }
+
+  Future<void> chooseProfilePicture() async {
+    try {
+      final image = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 512,
+        maxHeight: 512,
+        imageQuality: 82,
+      );
+      if (image == null) return;
+
+      final bytes = await image.readAsBytes();
+      if (bytes.length > 1024 * 1024) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Bitte ein kleineres Bild auswählen (max. 1 MB).'),
+          ),
+        );
+        return;
+      }
+
+      final encoded = base64Encode(bytes);
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString(_profilePictureKey, encoded);
+      if (mounted) setState(() => _profilePicture = MemoryImage(bytes));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Profilbild konnte nicht geladen werden: $error'),
+        ),
+      );
+    }
+  }
+
+  Future<void> removeProfilePicture() async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.remove(_profilePictureKey);
+    if (mounted) setState(() => _profilePicture = null);
+  }
+
+  Future<void> showLayoutPicker() async {
+    final accentOptions = <AccentOption>[
+      const AccentOption('Blau', Colors.blue),
+      const AccentOption('Grün', Colors.green),
+      const AccentOption('Lila', Colors.deepPurple),
+      const AccentOption('Orange', Colors.orange),
+      const AccentOption('Rot', Colors.red),
+      const AccentOption('Türkis', Colors.teal),
+    ];
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(18, 4, 18, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Design Studio',
+                style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 5),
+              const Text(
+                'Wähle Aufbau und Farbe. Beides bleibt auf diesem Gerät gespeichert.',
+              ),
+              const SizedBox(height: 18),
+              for (final style in PiLayoutStyle.values) ...[
+                PiLayoutOptionCard(
+                  style: style,
+                  selected: widget.layoutStyle == style,
+                  onTap: () async {
+                    widget.onLayoutChanged(style);
+                    if (sheetContext.mounted) Navigator.pop(sheetContext);
+                  },
+                ),
+                const SizedBox(height: 10),
+              ],
+              const SizedBox(height: 10),
+              Text(
+                'Akzentfarbe',
+                style: Theme.of(sheetContext).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  for (final option in accentOptions)
+                    ChoiceChip(
+                      selected: widget.accentColor == option.color,
+                      avatar: CircleAvatar(backgroundColor: option.color),
+                      label: Text(option.name),
+                      onSelected: (_) => widget.onAccentChanged(option.color),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> customizeDashboard() async {
@@ -480,6 +684,8 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Future<void> loadData() async {
+    if (_dataRequestInFlight) return;
+    _dataRequestInFlight = true;
     final stopwatch = Stopwatch()..start();
 
     try {
@@ -508,12 +714,6 @@ class _DashboardPageState extends State<DashboardPage> {
       }
 
       final result = Map<String, dynamic>.from(decoded);
-
-      final preferences = await SharedPreferences.getInstance();
-      await preferences.setString(
-        'pi_control_cached_dashboard',
-        jsonEncode(result),
-      );
 
       if (!mounted) return;
 
@@ -550,6 +750,9 @@ class _DashboardPageState extends State<DashboardPage> {
           }
         }
       });
+
+      unawaited(_cacheDashboard(result));
+      unawaited(updatePiControlWidgets(result, status: 'ONLINE'));
     } catch (e) {
       stopwatch.stop();
 
@@ -561,10 +764,35 @@ class _DashboardPageState extends State<DashboardPage> {
         latencyMs = null;
         error = e.toString();
       });
+      unawaited(updatePiControlWidgets(data ?? const {}, status: 'OFFLINE'));
+    } finally {
+      _dataRequestInFlight = false;
+    }
+  }
+
+  Future<void> _cacheDashboard(Map<String, dynamic> result) async {
+    final now = DateTime.now();
+    final previous = _lastDashboardCacheWrite;
+    if (previous != null &&
+        now.difference(previous) < const Duration(seconds: 30)) {
+      return;
+    }
+    _lastDashboardCacheWrite = now;
+
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString(
+        'pi_control_cached_dashboard',
+        jsonEncode(result),
+      );
+    } catch (_) {
+      // Ein Cache-Fehler darf den Live-Status nicht als offline markieren.
     }
   }
 
   Future<void> loadHistory() async {
+    if (_historyRequestInFlight) return;
+    _historyRequestInFlight = true;
     try {
       final response = await _apiGet('history');
 
@@ -604,10 +832,14 @@ class _DashboardPageState extends State<DashboardPage> {
       });
     } catch (_) {
       // Die App bleibt auch mit einem älteren Backend benutzbar.
+    } finally {
+      _historyRequestInFlight = false;
     }
   }
 
   Future<void> loadBenchmarkHistory() async {
+    if (_benchmarkHistoryRequestInFlight) return;
+    _benchmarkHistoryRequestInFlight = true;
     try {
       final response = await _apiGet('benchmark/history');
 
@@ -633,6 +865,8 @@ class _DashboardPageState extends State<DashboardPage> {
       });
     } catch (_) {
       // App bleibt mit einem älteren Backend benutzbar.
+    } finally {
+      _benchmarkHistoryRequestInFlight = false;
     }
   }
 
@@ -839,60 +1073,6 @@ class _DashboardPageState extends State<DashboardPage> {
     return score.clamp(0, 100).toInt();
   }
 
-  void showAccentPicker() {
-    final options = <AccentOption>[
-      const AccentOption('Blau', Colors.blue),
-      const AccentOption('Grün', Colors.green),
-      const AccentOption('Lila', Colors.deepPurple),
-      const AccentOption('Orange', Colors.orange),
-      const AccentOption('Rot', Colors.red),
-      const AccentOption('Türkis', Colors.teal),
-    ];
-
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'App-Farbe',
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Die Temperatur bleibt unabhängig davon grün/orange/rot.',
-                ),
-                const SizedBox(height: 16),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: [
-                    for (final option in options)
-                      ChoiceChip(
-                        selected: widget.accentColor == option.color,
-                        avatar: CircleAvatar(backgroundColor: option.color),
-                        label: Text(option.name),
-                        onSelected: (_) {
-                          widget.onAccentChanged(option.color);
-                          Navigator.of(sheetContext).pop();
-                        },
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   List<AlertItem> get alerts {
     final backendAlerts = data?['alerts'];
 
@@ -1071,6 +1251,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
   @override
   Widget build(BuildContext context) {
+    final layoutStyle = widget.layoutStyle;
     final english = Localizations.localeOf(context).languageCode == 'en';
     final cpu = data?['cpu'];
     final ram = data?['ram'];
@@ -1127,6 +1308,7 @@ class _DashboardPageState extends State<DashboardPage> {
     ];
     final currentPageIndex = selectedPageIndex.clamp(0, pageKeys.length - 1);
     final currentPage = pageKeys[currentPageIndex];
+    final narrowScreen = MediaQuery.sizeOf(context).width < 600;
     final pageTitle = switch (currentPage) {
       'weather' => english ? 'Flight weather' : 'Flugwetter',
       'files' => english ? 'Files' : 'Dateimanager',
@@ -1136,10 +1318,79 @@ class _DashboardPageState extends State<DashboardPage> {
       _ => english ? "Stoney's Raspberry Pi" : 'Stoneys Raspberry Pi',
     };
 
+    final navigationItems = [
+      for (final key in pageKeys)
+        switch (key) {
+          'dashboard' => PiNavigationItem(
+            keyName: key,
+            label: english ? 'Overview' : 'Übersicht',
+            icon: Icons.space_dashboard_outlined,
+            selectedIcon: Icons.space_dashboard_rounded,
+          ),
+          'weather' => PiNavigationItem(
+            keyName: key,
+            label: english ? 'Weather' : 'Flugwetter',
+            icon: Icons.flight_outlined,
+            selectedIcon: Icons.flight_rounded,
+          ),
+          'files' => PiNavigationItem(
+            keyName: key,
+            label: english ? 'Files' : 'Dateien',
+            icon: Icons.folder_outlined,
+            selectedIcon: Icons.folder_rounded,
+          ),
+          'terminal' => PiNavigationItem(
+            keyName: key,
+            label: 'Terminal',
+            icon: Icons.terminal_outlined,
+            selectedIcon: Icons.terminal_rounded,
+          ),
+          'users' => PiNavigationItem(
+            keyName: key,
+            label: 'Admin',
+            icon: Icons.admin_panel_settings_outlined,
+            selectedIcon: Icons.admin_panel_settings_rounded,
+          ),
+          _ => PiNavigationItem(
+            keyName: key,
+            label: english ? 'More' : 'Mehr',
+            icon: Icons.apps_outlined,
+            selectedIcon: Icons.apps_rounded,
+          ),
+        },
+    ];
+
+    void selectPage(int index) {
+      setState(() => selectedPageIndex = index);
+      if (index == 0) {
+        loadData();
+        loadHistory();
+      }
+    }
+
     return Scaffold(
       appBar: AppBar(
+        toolbarHeight: narrowScreen
+            ? 56
+            : layoutStyle == PiLayoutStyle.compact
+            ? 58
+            : 70,
+        flexibleSpace: layoutStyle == PiLayoutStyle.aurora
+            ? DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      widget.accentColor.withValues(alpha: 0.20),
+                      const Color(0xFF0B1830),
+                    ],
+                  ),
+                ),
+              )
+            : null,
         title: Text(
           pageTitle,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
         actions: [
@@ -1148,17 +1399,45 @@ class _DashboardPageState extends State<DashboardPage> {
             icon: const Icon(Icons.search_rounded),
             tooltip: 'Globale Suche',
           ),
-          IconButton(
-            onPressed: showAccentPicker,
-            icon: const Icon(Icons.palette_outlined),
-            tooltip: 'App-Farbe',
-          ),
-          if (currentPage == 'dashboard')
+          if (narrowScreen)
+            PopupMenuButton<String>(
+              tooltip: 'Ansicht anpassen',
+              icon: const Icon(Icons.tune_rounded),
+              onSelected: (action) {
+                if (action == 'design') showLayoutPicker();
+                if (action == 'dashboard') customizeDashboard();
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'design',
+                  child: ListTile(
+                    leading: Icon(Icons.design_services_rounded),
+                    title: Text('Design Studio'),
+                  ),
+                ),
+                if (currentPage == 'dashboard')
+                  const PopupMenuItem(
+                    value: 'dashboard',
+                    child: ListTile(
+                      leading: Icon(Icons.dashboard_customize_outlined),
+                      title: Text('Übersicht anordnen'),
+                    ),
+                  ),
+              ],
+            )
+          else ...[
             IconButton(
-              onPressed: customizeDashboard,
-              icon: const Icon(Icons.dashboard_customize_outlined),
-              tooltip: 'Dashboard anordnen',
+              onPressed: showLayoutPicker,
+              icon: const Icon(Icons.design_services_rounded),
+              tooltip: 'Design Studio',
             ),
+            if (currentPage == 'dashboard')
+              IconButton(
+                onPressed: customizeDashboard,
+                icon: const Icon(Icons.dashboard_customize_outlined),
+                tooltip: 'Dashboard anordnen',
+              ),
+          ],
           if (currentPage == 'dashboard')
             IconButton(
               onPressed: loadAll,
@@ -1169,16 +1448,23 @@ class _DashboardPageState extends State<DashboardPage> {
             tooltip: 'Konto',
             icon: CircleAvatar(
               radius: 16,
-              child: Text(
-                widget.session.displayName.isEmpty
-                    ? '?'
-                    : widget.session.displayName[0].toUpperCase(),
-                style: const TextStyle(fontWeight: FontWeight.w900),
-              ),
+              backgroundImage: _profilePicture,
+              child: _profilePicture == null
+                  ? Text(
+                      widget.session.displayName.isEmpty
+                          ? '?'
+                          : widget.session.displayName[0].toUpperCase(),
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    )
+                  : null,
             ),
             onSelected: (action) {
               if (action == 'changelog') {
                 showPiControlChangelog(context);
+              } else if (action == 'profile-picture') {
+                chooseProfilePicture();
+              } else if (action == 'profile-picture-remove') {
+                removeProfilePicture();
               } else if (action == 'backups') {
                 showBackupManager(context, widget.client);
               } else if (action == 'password') {
@@ -1225,6 +1511,25 @@ class _DashboardPageState extends State<DashboardPage> {
                   subtitle: Text('@${widget.session.username}'),
                 ),
               ),
+              const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'profile-picture',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.add_a_photo_outlined),
+                  title: Text('Profilbild auswählen'),
+                  subtitle: Text('Aus deiner Galerie · nur auf diesem Gerät'),
+                ),
+              ),
+              if (_profilePicture != null)
+                const PopupMenuItem(
+                  value: 'profile-picture-remove',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.person_remove_outlined),
+                    title: Text('Profilbild entfernen'),
+                  ),
+                ),
               const PopupMenuDivider(),
               if (widget.session.isAdmin)
                 const PopupMenuItem(
@@ -1275,617 +1580,793 @@ class _DashboardPageState extends State<DashboardPage> {
           ),
         ],
       ),
-      body: maintenance
-          ? const _MaintenanceView()
-          : IndexedStack(
-              index: currentPageIndex,
-              children: [
-                RefreshIndicator(
-                  onRefresh: loadAll,
-                  child: ListView(
-                    padding: const EdgeInsets.all(16),
-                    children: [
-                      DashboardHeroCard(
-                        connected: connected,
-                        loading: loading,
-                        hostname:
-                            data?['hostname']?.toString() ?? 'Raspberry Pi',
-                        uptime:
-                            data?['uptime']?['formatted']?.toString() ?? '—',
-                        temperature: temperature,
-                        healthScore: healthScore,
-                        accentColor: widget.accentColor,
-                        onOpenFiles: widget.session.can('files_view')
-                            ? () {
-                                setState(() {
-                                  selectedPageIndex = pageKeys.indexOf('files');
-                                });
-                              }
-                            : null,
-                      ),
-
-                      const SizedBox(height: 12),
-
-                      Card(
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: dashboardShortcuts.map((key) {
-                              final (icon, label) = switch (key) {
-                                'files' => (Icons.folder_rounded, 'Dateien'),
-                                'more' => (
-                                  Icons.photo_library_rounded,
-                                  'Medien & Mehr',
-                                ),
-                                'backups' => (Icons.backup_rounded, 'Backups'),
-                                _ => (Icons.search_rounded, 'Suche'),
-                              };
-                              return ActionChip(
-                                avatar: Icon(icon, size: 19),
-                                label: Text(label),
-                                onPressed: () {
-                                  if (key == 'files' &&
-                                      pageKeys.contains('files')) {
-                                    setState(
-                                      () => selectedPageIndex = pageKeys
-                                          .indexOf('files'),
+      body: PiPageSurface(
+        child: maintenance
+            ? const _MaintenanceView()
+            : PiLayoutFrame(
+                style: layoutStyle,
+                selectedIndex: currentPageIndex,
+                items: navigationItems,
+                onSelected: selectPage,
+                child: IndexedStack(
+                  index: currentPageIndex,
+                  children: [
+                    PiDashboardList(
+                      onRefresh: loadAll,
+                      style: layoutStyle,
+                      children: [
+                        DashboardHeroCard(
+                          style: layoutStyle,
+                          connected: connected,
+                          loading: loading,
+                          hostname:
+                              data?['hostname']?.toString() ?? 'Raspberry Pi',
+                          uptime:
+                              data?['uptime']?['formatted']?.toString() ?? '—',
+                          temperature: temperature,
+                          healthScore: healthScore,
+                          accentColor: widget.accentColor,
+                          onOpenFiles: widget.session.can('files_view')
+                              ? () {
+                                  setState(() {
+                                    selectedPageIndex = pageKeys.indexOf(
+                                      'files',
                                     );
-                                  } else if (key == 'more') {
-                                    setState(
-                                      () => selectedPageIndex = pageKeys
-                                          .indexOf('more'),
-                                    );
-                                  } else if (key == 'backups' &&
-                                      widget.session.isAdmin) {
-                                    showBackupManager(context, widget.client);
-                                  } else {
-                                    showGlobalSearch();
-                                  }
-                                },
-                              );
-                            }).toList(),
-                          ),
+                                  });
+                                }
+                              : null,
                         ),
-                      ),
 
-                      const SizedBox(height: 12),
+                        const SizedBox(height: 12),
 
-                      if (availableAppVersion != null && !kIsWeb) ...[
-                        Card(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .tertiaryContainer,
-                          child: ListTile(
-                            leading: const Icon(
-                              Icons.download_for_offline_rounded,
+                        PiQuickActions(
+                          style: layoutStyle,
+                          keys: dashboardShortcuts,
+                          onPressed: (key) {
+                            if (key == 'files' && pageKeys.contains('files')) {
+                              setState(
+                                () => selectedPageIndex = pageKeys.indexOf(
+                                  'files',
+                                ),
+                              );
+                            } else if (key == 'more') {
+                              setState(
+                                () => selectedPageIndex = pageKeys.indexOf(
+                                  'more',
+                                ),
+                              );
+                            } else if (key == 'backups' &&
+                                widget.session.isAdmin) {
+                              showBackupManager(context, widget.client);
+                            } else {
+                              showGlobalSearch();
+                            }
+                          },
+                        ),
+
+                        const SizedBox(height: 12),
+
+                        if (availableAppVersion != null && !kIsWeb) ...[
+                          Card(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .tertiaryContainer,
+                            child: ListTile(
+                              leading: const Icon(
+                                Icons.download_for_offline_rounded,
+                              ),
+                              title: Text(
+                                'App-Update $availableAppVersion verfügbar',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              subtitle: Text(
+                                defaultTargetPlatform == TargetPlatform.android
+                                    ? 'Neue APK herunterladen und installieren.'
+                                    : 'Die iPhone-Version wird über TestFlight/App Store aktualisiert.',
+                              ),
+                              trailing:
+                                  defaultTargetPlatform ==
+                                      TargetPlatform.android
+                                  ? FilledButton(
+                                      onPressed: openAndroidUpdate,
+                                      child: const Text('Herunterladen'),
+                                    )
+                                  : null,
                             ),
-                            title: Text(
-                              'App-Update $availableAppVersion verfügbar',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w800,
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+
+                        if (showUpdateNotice) ...[
+                          Card(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .primaryContainer,
+                            child: ListTile(
+                              leading: const Icon(
+                                Icons.system_update_alt_rounded,
+                              ),
+                              title: const Text(
+                                'Pi Control 2.0.1 ist da',
+                                style: TextStyle(fontWeight: FontWeight.w800),
+                              ),
+                              subtitle: const Text(
+                                'Backups, Freigabeverwaltung, Mehrfachauswahl und App-Updates sind neu.',
+                              ),
+                              onTap: () => showPiControlChangelog(context),
+                              trailing: IconButton(
+                                onPressed: () {
+                                  setState(() => showUpdateNotice = false);
+                                },
+                                tooltip: 'Hinweis schließen',
+                                icon: const Icon(Icons.close_rounded),
                               ),
                             ),
-                            subtitle: Text(
-                              defaultTargetPlatform == TargetPlatform.android
-                                  ? 'Neue APK herunterladen und installieren.'
-                                  : 'Die iPhone-Version wird über TestFlight/App Store aktualisiert.',
-                            ),
-                            trailing:
-                                defaultTargetPlatform == TargetPlatform.android
-                                ? FilledButton(
-                                    onPressed: openAndroidUpdate,
-                                    child: const Text('Herunterladen'),
-                                  )
-                                : null,
                           ),
-                        ),
-                        const SizedBox(height: 12),
-                      ],
+                          const SizedBox(height: 12),
+                        ],
 
-                      if (showUpdateNotice) ...[
-                        Card(
-                          color: Theme.of(context).colorScheme.primaryContainer,
-                          child: ListTile(
-                            leading: const Icon(
-                              Icons.system_update_alt_rounded,
+                        StatusOverviewCard(
+                          connected: connected,
+                          loading: loading,
+                          alerts: alertItems,
+                          lastUpdated: formatLastUpdated(),
+                        ),
+
+                        if (alertItems.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          AlertsCard(alerts: alertItems),
+                        ],
+
+                        const SizedBox(height: 12),
+
+                        HealthScoreCard(
+                          score: healthScore,
+                          alertCount: alertItems.length,
+                        ),
+
+                        const SizedBox(height: 20),
+
+                        const SectionTitle(
+                          icon: Icons.monitor_heart_outlined,
+                          title: 'System',
+                        ),
+
+                        const SizedBox(height: 12),
+
+                        PiSystemGrid(
+                          style: layoutStyle,
+                          children: [
+                            SystemCard(
+                              icon: Icons.memory,
+                              title: 'CPU',
+                              value: cpuUsage == null
+                                  ? '—'
+                                  : '${formatNumber(cpuUsage)} %',
+                              subtitle: cpuFrequency == null
+                                  ? 'Auslastung'
+                                  : '${formatNumber(cpuFrequency)} MHz',
+                              numericValue: cpuUsage,
+                              type: SystemCardType.percent,
+                              accentColor: widget.accentColor,
                             ),
+                            SystemCard(
+                              icon: Icons.thermostat,
+                              title: 'Temperatur',
+                              value: temperature == null
+                                  ? '—'
+                                  : '${formatNumber(temperature)} °C',
+                              subtitle: 'CPU',
+                              numericValue: temperature,
+                              type: SystemCardType.temperature,
+                              accentColor: widget.accentColor,
+                            ),
+                            SystemCard(
+                              icon: Icons.memory,
+                              title: 'RAM',
+                              value: ramPercent == null
+                                  ? '—'
+                                  : '${formatNumber(ramPercent)} %',
+                              subtitle: ramUsed == null || ramTotal == null
+                                  ? 'Speicher'
+                                  : '${formatNumber(ramUsed)} / ${formatNumber(ramTotal)} MB',
+                              numericValue: ramPercent,
+                              type: SystemCardType.percent,
+                              accentColor: widget.accentColor,
+                            ),
+                            SystemCard(
+                              icon: Icons.sd_storage,
+                              title: 'SD-Karte',
+                              value: sdPercent == null
+                                  ? '—'
+                                  : '${formatNumber(sdPercent)} %',
+                              subtitle: sdUsed == null || sdTotal == null
+                                  ? 'Speicher'
+                                  : '${formatNumber(sdUsed)} / ${formatNumber(sdTotal)} GB',
+                              numericValue: sdPercent,
+                              type: SystemCardType.percent,
+                              accentColor: widget.accentColor,
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 12),
+
+                        TemperatureStatsCard(
+                          current: temperature,
+                          sessionMax: sessionMaxTemperature,
+                          max24h: max24hTemperature,
+                        ),
+
+                        const SizedBox(height: 12),
+
+                        Card(
+                          clipBehavior: Clip.antiAlias,
+                          child: ExpansionTile(
+                            leading: const Icon(Icons.analytics_outlined),
                             title: const Text(
-                              'Pi Control 2.0.1 ist da',
-                              style: TextStyle(fontWeight: FontWeight.w800),
+                              'Detaillierte Systemdaten',
+                              style: TextStyle(fontWeight: FontWeight.bold),
                             ),
                             subtitle: const Text(
-                              'Backups, Freigabeverwaltung, Mehrfachauswahl und App-Updates sind neu.',
+                              'Auslastung und 24-Stunden-Verlauf',
                             ),
-                            onTap: () => showPiControlChangelog(context),
-                            trailing: IconButton(
-                              onPressed: () {
-                                setState(() => showUpdateNotice = false);
-                              },
-                              tooltip: 'Hinweis schließen',
-                              icon: const Icon(Icons.close_rounded),
-                            ),
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  0,
+                                  16,
+                                  16,
+                                ),
+                                child: Column(
+                                  children: [
+                                    DetailBar(
+                                      title: 'CPU',
+                                      value: cpuUsage,
+                                      suffix: '%',
+                                      icon: Icons.memory,
+                                      color: widget.accentColor,
+                                    ),
+                                    const SizedBox(height: 16),
+                                    DetailBar(
+                                      title: 'RAM',
+                                      value: ramPercent,
+                                      suffix: '%',
+                                      icon: Icons.memory,
+                                      color: widget.accentColor,
+                                    ),
+                                    const SizedBox(height: 16),
+                                    DetailBar(
+                                      title: 'SD-Karte',
+                                      value: sdPercent,
+                                      suffix: '%',
+                                      icon: Icons.sd_storage,
+                                      color: widget.accentColor,
+                                    ),
+                                    const SizedBox(height: 22),
+                                    LiveChartCard(
+                                      title: 'CPU – 24 Stunden',
+                                      values: cpuHistory,
+                                      unit: '%',
+                                      icon: Icons.memory,
+                                      maxValue: 100,
+                                      lineColor: widget.accentColor,
+                                    ),
+                                    const SizedBox(height: 12),
+                                    LiveChartCard(
+                                      title: 'RAM – 24 Stunden',
+                                      values: ramHistory,
+                                      unit: '%',
+                                      icon: Icons.storage,
+                                      maxValue: 100,
+                                      lineColor: widget.accentColor,
+                                    ),
+                                    const SizedBox(height: 12),
+                                    LiveChartCard(
+                                      title: 'Temperatur – 24 Stunden',
+                                      values: temperatureHistory,
+                                      unit: '°C',
+                                      icon: Icons.thermostat,
+                                      maxValue: 100,
+                                      lineColor: Colors.green,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
                         ),
+
+                        const SizedBox(height: 20),
+
+                        const SectionTitle(
+                          icon: Icons.storage_outlined,
+                          title: 'Speicher',
+                        ),
+
                         const SizedBox(height: 12),
-                      ],
 
-                      StatusOverviewCard(
-                        connected: connected,
-                        loading: loading,
-                        alerts: alertItems,
-                        lastUpdated: formatLastUpdated(),
-                      ),
+                        StorageCard(
+                          title: 'NAS / USB-Stick',
+                          icon: Icons.usb,
+                          used: usbUsed,
+                          free: usbFree,
+                          total: usbTotal,
+                          percent: usbPercent,
+                          mounted: usb != null,
+                        ),
 
-                      if (alertItems.isNotEmpty) ...[
                         const SizedBox(height: 12),
-                        AlertsCard(alerts: alertItems),
-                      ],
 
-                      const SizedBox(height: 12),
+                        StorageCard(
+                          title: 'SD-Karte',
+                          icon: Icons.sd_storage,
+                          used: sdUsed,
+                          free: sdFree,
+                          total: sdTotal,
+                          percent: sdPercent,
+                          mounted: sd != null,
+                        ),
 
-                      HealthScoreCard(
-                        score: healthScore,
-                        alertCount: alertItems.length,
-                      ),
+                        const SizedBox(height: 20),
 
-                      const SizedBox(height: 20),
+                        const SectionTitle(
+                          icon: Icons.network_check,
+                          title: 'Netzwerk',
+                        ),
 
-                      const SectionTitle(
-                        icon: Icons.monitor_heart_outlined,
-                        title: 'System',
-                      ),
+                        const SizedBox(height: 12),
 
-                      const SizedBox(height: 12),
+                        NetworkCard(
+                          lanIp: data?['ip']?.toString(),
+                          tailscaleIp: tailscale?['ip']?.toString(),
+                          tailscaleOnline: tailscaleOnline,
+                          latencyMs: latencyMs,
+                          activeConnection: activeConnectionName,
+                        ),
 
-                      GridView.count(
-                        crossAxisCount: 2,
-                        crossAxisSpacing: 12,
-                        mainAxisSpacing: 12,
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        mainAxisExtent: 165,
-                        children: [
-                          SystemCard(
-                            icon: Icons.memory,
-                            title: 'CPU',
-                            value: cpuUsage == null
-                                ? '—'
-                                : '${formatNumber(cpuUsage)} %',
-                            subtitle: cpuFrequency == null
-                                ? 'Auslastung'
-                                : '${formatNumber(cpuFrequency)} MHz',
-                            numericValue: cpuUsage,
-                            type: SystemCardType.percent,
-                            accentColor: widget.accentColor,
+                        const SizedBox(height: 12),
+
+                        ServiceControlCard(
+                          title: 'Samba / NAS',
+                          icon: Icons.folder_shared,
+                          online: sambaOnline,
+                          description: sambaOnline
+                              ? 'Dateifreigabe läuft'
+                              : 'Dateifreigabe ist gestoppt',
+                          onRestart: widget.session.can('system_control')
+                              ? () {
+                                  restartService('samba', 'Samba');
+                                }
+                              : null,
+                        ),
+
+                        const SizedBox(height: 12),
+
+                        ServiceControlCard(
+                          title: 'Tailscale',
+                          icon: Icons.vpn_lock,
+                          online: tailscaleOnline,
+                          description: tailscaleOnline
+                              ? 'Fernzugriff verbunden'
+                              : 'Fernzugriff nicht verbunden',
+                          onRestart: widget.session.can('system_control')
+                              ? () {
+                                  restartService('tailscale', 'Tailscale');
+                                }
+                              : null,
+                        ),
+
+                        const SizedBox(height: 20),
+
+                        const SectionTitle(
+                          icon: Icons.speed,
+                          title: 'Benchmark',
+                        ),
+
+                        const SizedBox(height: 12),
+
+                        BenchmarkCard(
+                          running: benchmarkRunning,
+                          result: currentBenchmark,
+                          history: benchmarkHistory,
+                          onRun: widget.session.can('benchmark_run')
+                              ? runCpuBenchmark
+                              : null,
+                        ),
+
+                        const SizedBox(height: 20),
+
+                        const SectionTitle(
+                          icon: Icons.info_outline,
+                          title: 'Systeminformationen',
+                        ),
+
+                        const SizedBox(height: 12),
+
+                        SystemInfoCard(
+                          rows: [
+                            InfoRowData(
+                              'Hostname',
+                              data?['hostname']?.toString() ?? '—',
+                            ),
+                            InfoRowData(
+                              'Modell',
+                              system?['model']?.toString() ?? '—',
+                            ),
+                            InfoRowData(
+                              'Betriebssystem',
+                              system?['os']?.toString() ?? '—',
+                            ),
+                            InfoRowData(
+                              'Kernel',
+                              data?['kernel']?.toString() ??
+                                  system?['kernel']?.toString() ??
+                                  '—',
+                            ),
+                            InfoRowData(
+                              'CPU-Takt',
+                              cpuFrequency == null
+                                  ? '—'
+                                  : '${formatNumber(cpuFrequency)} MHz',
+                            ),
+                            InfoRowData(
+                              'Load Average',
+                              system?['load_average']?.toString() ?? '—',
+                            ),
+                            InfoRowData(
+                              'Uptime',
+                              data?['uptime']?['formatted']?.toString() ?? '—',
+                            ),
+                            InfoRowData(
+                              'Warn-Push',
+                              system?['notifications']?.toString() ?? 'ntfy',
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 20),
+
+                        if (widget.session.can('system_control')) ...[
+                          const SectionTitle(
+                            icon: Icons.settings_remote,
+                            title: 'Steuerung',
                           ),
-                          SystemCard(
-                            icon: Icons.thermostat,
-                            title: 'Temperatur',
-                            value: temperature == null
-                                ? '—'
-                                : '${formatNumber(temperature)} °C',
-                            subtitle: 'CPU',
-                            numericValue: temperature,
-                            type: SystemCardType.temperature,
-                            accentColor: widget.accentColor,
-                          ),
-                          SystemCard(
-                            icon: Icons.memory,
-                            title: 'RAM',
-                            value: ramPercent == null
-                                ? '—'
-                                : '${formatNumber(ramPercent)} %',
-                            subtitle: ramUsed == null || ramTotal == null
-                                ? 'Speicher'
-                                : '${formatNumber(ramUsed)} / ${formatNumber(ramTotal)} MB',
-                            numericValue: ramPercent,
-                            type: SystemCardType.percent,
-                            accentColor: widget.accentColor,
-                          ),
-                          SystemCard(
-                            icon: Icons.sd_storage,
-                            title: 'SD-Karte',
-                            value: sdPercent == null
-                                ? '—'
-                                : '${formatNumber(sdPercent)} %',
-                            subtitle: sdUsed == null || sdTotal == null
-                                ? 'Speicher'
-                                : '${formatNumber(sdUsed)} / ${formatNumber(sdTotal)} GB',
-                            numericValue: sdPercent,
-                            type: SystemCardType.percent,
-                            accentColor: widget.accentColor,
+
+                          const SizedBox(height: 12),
+
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton.icon(
+                              onPressed: reboot,
+                              icon: const Icon(Icons.restart_alt),
+                              label: const Text('Raspberry Pi neu starten'),
+                              style: FilledButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 16,
+                                ),
+                              ),
+                            ),
                           ),
                         ],
-                      ),
 
-                      const SizedBox(height: 12),
-
-                      TemperatureStatsCard(
-                        current: temperature,
-                        sessionMax: sessionMaxTemperature,
-                        max24h: max24hTemperature,
-                      ),
-
-                      const SizedBox(height: 12),
-
-                      Card(
-                        clipBehavior: Clip.antiAlias,
-                        child: ExpansionTile(
-                          leading: const Icon(Icons.analytics_outlined),
-                          title: const Text(
-                            'Detaillierte Systemdaten',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          subtitle: const Text(
-                            'Auslastung und 24-Stunden-Verlauf',
-                          ),
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                              child: Column(
+                        if (error != null) ...[
+                          const SizedBox(height: 16),
+                          Card(
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  DetailBar(
-                                    title: 'CPU',
-                                    value: cpuUsage,
-                                    suffix: '%',
-                                    icon: Icons.memory,
-                                    color: widget.accentColor,
+                                  const Icon(
+                                    Icons.error_outline,
+                                    color: Colors.red,
                                   ),
-                                  const SizedBox(height: 16),
-                                  DetailBar(
-                                    title: 'RAM',
-                                    value: ramPercent,
-                                    suffix: '%',
-                                    icon: Icons.memory,
-                                    color: widget.accentColor,
-                                  ),
-                                  const SizedBox(height: 16),
-                                  DetailBar(
-                                    title: 'SD-Karte',
-                                    value: sdPercent,
-                                    suffix: '%',
-                                    icon: Icons.sd_storage,
-                                    color: widget.accentColor,
-                                  ),
-                                  const SizedBox(height: 22),
-                                  LiveChartCard(
-                                    title: 'CPU – 24 Stunden',
-                                    values: cpuHistory,
-                                    unit: '%',
-                                    icon: Icons.memory,
-                                    maxValue: 100,
-                                    lineColor: widget.accentColor,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  LiveChartCard(
-                                    title: 'RAM – 24 Stunden',
-                                    values: ramHistory,
-                                    unit: '%',
-                                    icon: Icons.storage,
-                                    maxValue: 100,
-                                    lineColor: widget.accentColor,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  LiveChartCard(
-                                    title: 'Temperatur – 24 Stunden',
-                                    values: temperatureHistory,
-                                    unit: '°C',
-                                    icon: Icons.thermostat,
-                                    maxValue: 100,
-                                    lineColor: Colors.green,
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Text(
+                                      'Verbindungsfehler: $error',
+                                      style: const TextStyle(color: Colors.red),
+                                    ),
                                   ),
                                 ],
                               ),
                             ),
-                          ],
-                        ),
-                      ),
-
-                      const SizedBox(height: 20),
-
-                      const SectionTitle(
-                        icon: Icons.storage_outlined,
-                        title: 'Speicher',
-                      ),
-
-                      const SizedBox(height: 12),
-
-                      StorageCard(
-                        title: 'NAS / USB-Stick',
-                        icon: Icons.usb,
-                        used: usbUsed,
-                        free: usbFree,
-                        total: usbTotal,
-                        percent: usbPercent,
-                        mounted: usb != null,
-                      ),
-
-                      const SizedBox(height: 12),
-
-                      StorageCard(
-                        title: 'SD-Karte',
-                        icon: Icons.sd_storage,
-                        used: sdUsed,
-                        free: sdFree,
-                        total: sdTotal,
-                        percent: sdPercent,
-                        mounted: sd != null,
-                      ),
-
-                      const SizedBox(height: 20),
-
-                      const SectionTitle(
-                        icon: Icons.network_check,
-                        title: 'Netzwerk',
-                      ),
-
-                      const SizedBox(height: 12),
-
-                      NetworkCard(
-                        lanIp: data?['ip']?.toString(),
-                        tailscaleIp: tailscale?['ip']?.toString(),
-                        tailscaleOnline: tailscaleOnline,
-                        latencyMs: latencyMs,
-                        activeConnection: activeConnectionName,
-                      ),
-
-                      const SizedBox(height: 12),
-
-                      ServiceControlCard(
-                        title: 'Samba / NAS',
-                        icon: Icons.folder_shared,
-                        online: sambaOnline,
-                        description: sambaOnline
-                            ? 'Dateifreigabe läuft'
-                            : 'Dateifreigabe ist gestoppt',
-                        onRestart: widget.session.can('system_control')
-                            ? () {
-                                restartService('samba', 'Samba');
-                              }
-                            : null,
-                      ),
-
-                      const SizedBox(height: 12),
-
-                      ServiceControlCard(
-                        title: 'Tailscale',
-                        icon: Icons.vpn_lock,
-                        online: tailscaleOnline,
-                        description: tailscaleOnline
-                            ? 'Fernzugriff verbunden'
-                            : 'Fernzugriff nicht verbunden',
-                        onRestart: widget.session.can('system_control')
-                            ? () {
-                                restartService('tailscale', 'Tailscale');
-                              }
-                            : null,
-                      ),
-
-                      const SizedBox(height: 20),
-
-                      const SectionTitle(icon: Icons.speed, title: 'Benchmark'),
-
-                      const SizedBox(height: 12),
-
-                      BenchmarkCard(
-                        running: benchmarkRunning,
-                        result: currentBenchmark,
-                        history: benchmarkHistory,
-                        onRun: widget.session.can('benchmark_run')
-                            ? runCpuBenchmark
-                            : null,
-                      ),
-
-                      const SizedBox(height: 20),
-
-                      const SectionTitle(
-                        icon: Icons.info_outline,
-                        title: 'Systeminformationen',
-                      ),
-
-                      const SizedBox(height: 12),
-
-                      SystemInfoCard(
-                        rows: [
-                          InfoRowData(
-                            'Hostname',
-                            data?['hostname']?.toString() ?? '—',
-                          ),
-                          InfoRowData(
-                            'Modell',
-                            system?['model']?.toString() ?? '—',
-                          ),
-                          InfoRowData(
-                            'Betriebssystem',
-                            system?['os']?.toString() ?? '—',
-                          ),
-                          InfoRowData(
-                            'Kernel',
-                            data?['kernel']?.toString() ??
-                                system?['kernel']?.toString() ??
-                                '—',
-                          ),
-                          InfoRowData(
-                            'CPU-Takt',
-                            cpuFrequency == null
-                                ? '—'
-                                : '${formatNumber(cpuFrequency)} MHz',
-                          ),
-                          InfoRowData(
-                            'Load Average',
-                            system?['load_average']?.toString() ?? '—',
-                          ),
-                          InfoRowData(
-                            'Uptime',
-                            data?['uptime']?['formatted']?.toString() ?? '—',
-                          ),
-                          InfoRowData(
-                            'Warn-Push',
-                            system?['notifications']?.toString() ?? 'ntfy',
                           ),
                         ],
-                      ),
 
-                      const SizedBox(height: 20),
+                        const SizedBox(height: 24),
 
-                      if (widget.session.can('system_control')) ...[
-                        const SectionTitle(
-                          icon: Icons.settings_remote,
-                          title: 'Steuerung',
-                        ),
-
-                        const SizedBox(height: 12),
-
-                        SizedBox(
-                          width: double.infinity,
-                          child: FilledButton.icon(
-                            onPressed: reboot,
-                            icon: const Icon(Icons.restart_alt),
-                            label: const Text('Raspberry Pi neu starten'),
-                            style: FilledButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 16),
+                        const Center(
+                          child: Text(
+                            'Erstellt mit Liebe von Stoney22',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Colors.grey,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
                         ),
+
+                        const SizedBox(height: 8),
                       ],
-
-                      if (error != null) ...[
-                        const SizedBox(height: 16),
-                        Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Icon(
-                                  Icons.error_outline,
-                                  color: Colors.red,
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Text(
-                                    'Verbindungsfehler: $error',
-                                    style: const TextStyle(color: Colors.red),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-
-                      const SizedBox(height: 24),
-
-                      const Center(
-                        child: Text(
-                          'Erstellt mit Liebe von Stoney22',
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: Colors.grey,
-                            fontWeight: FontWeight.w500,
-                          ),
+                    ),
+                    AviationWeatherView(
+                      accentColor: widget.accentColor,
+                      english: english,
+                      apiGet: (path, headers) => _apiGet(
+                        path,
+                        headers: headers,
+                        timeout: const Duration(seconds: 15),
+                      ),
+                    ),
+                    if (widget.session.can('files_view'))
+                      FileManagerView(
+                        accentColor: widget.accentColor,
+                        authToken: widget.session.token,
+                        username: widget.session.username,
+                        canUpload: widget.session.can('files_upload'),
+                        canManage: widget.session.can('files_manage'),
+                        isAdmin: widget.session.isAdmin,
+                        apiBase: () => widget.client.activeBase,
+                        apiGet: (path, headers) =>
+                            _apiGet(path, headers: headers),
+                        apiPost: (path, headers, body, timeout) => _apiPost(
+                          path,
+                          headers: headers,
+                          body: body,
+                          timeout: timeout ?? const Duration(seconds: 10),
                         ),
                       ),
+                    if (widget.session.can('terminal_access'))
+                      TerminalView(
+                        accentColor: widget.accentColor,
+                        apiPost: (path, headers, body, timeout) => _apiPost(
+                          path,
+                          headers: headers,
+                          body: body,
+                          timeout: timeout ?? const Duration(seconds: 20),
+                        ),
+                      ),
+                    if (widget.session.can('users_manage'))
+                      UserAdminView(
+                        client: widget.client,
+                        session: widget.session,
+                        onSessionUpdated: widget.onSessionUpdated,
+                        accentColor: widget.accentColor,
+                      ),
+                    FeatureHubView(
+                      client: widget.client,
+                      session: widget.session,
+                    ),
+                  ],
+                ),
+              ),
+      ),
+      bottomNavigationBar: maintenance || layoutStyle.ownsNavigation
+          ? null
+          : PiBottomNavigation(
+              style: layoutStyle,
+              selectedIndex: currentPageIndex,
+              items: navigationItems,
+              onSelected: selectPage,
+            ),
+    );
+  }
+}
 
-                      const SizedBox(height: 8),
-                    ],
-                  ),
-                ),
-                AviationWeatherView(
-                  accentColor: widget.accentColor,
-                  english: english,
-                  apiGet: (path, headers) => _apiGet(
-                    path,
-                    headers: headers,
-                    timeout: const Duration(seconds: 15),
-                  ),
-                ),
-                if (widget.session.can('files_view'))
-                  FileManagerView(
-                    accentColor: widget.accentColor,
-                    authToken: widget.session.token,
-                    username: widget.session.username,
-                    canUpload: widget.session.can('files_upload'),
-                    canManage: widget.session.can('files_manage'),
-                    apiBase: () => widget.client.activeBase,
-                    apiGet: (path, headers) => _apiGet(path, headers: headers),
-                    apiPost: (path, headers, body, timeout) => _apiPost(
-                      path,
-                      headers: headers,
-                      body: body,
-                      timeout: timeout ?? const Duration(seconds: 10),
-                    ),
-                  ),
-                if (widget.session.can('terminal_access'))
-                  TerminalView(
-                    accentColor: widget.accentColor,
-                    apiPost: (path, headers, body, timeout) => _apiPost(
-                      path,
-                      headers: headers,
-                      body: body,
-                      timeout: timeout ?? const Duration(seconds: 20),
-                    ),
-                  ),
-                if (widget.session.can('users_manage'))
-                  UserAdminView(
-                    client: widget.client,
-                    session: widget.session,
-                    onSessionUpdated: widget.onSessionUpdated,
-                    accentColor: widget.accentColor,
-                  ),
-                FeatureHubView(client: widget.client, session: widget.session),
-              ],
+class PiDashboardList extends StatelessWidget {
+  final PiLayoutStyle style;
+  final RefreshCallback onRefresh;
+  final List<Widget> children;
+
+  const PiDashboardList({
+    super.key,
+    required this.style,
+    required this.onRefresh,
+    required this.children,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final design = context.piDesign;
+    final maxWidth = switch (style) {
+      PiLayoutStyle.aurora => 1120.0,
+      PiLayoutStyle.commandCenter => 1480.0,
+      PiLayoutStyle.compact => 1560.0,
+      PiLayoutStyle.classic => 1040.0,
+    };
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView(
+        padding: EdgeInsets.all(design.pagePadding),
+        children: [
+          for (final child in children)
+            Center(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: maxWidth),
+                child: SizedBox(width: double.infinity, child: child),
+              ),
             ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: currentPageIndex,
-        onDestinationSelected: (index) {
-          setState(() {
-            selectedPageIndex = index;
-          });
-        },
-        destinations: [
-          NavigationDestination(
-            icon: const Icon(Icons.space_dashboard_outlined),
-            selectedIcon: const Icon(Icons.space_dashboard_rounded),
-            label: english ? 'Overview' : 'Übersicht',
-          ),
-          NavigationDestination(
-            icon: const Icon(Icons.flight_outlined),
-            selectedIcon: const Icon(Icons.flight_rounded),
-            label: english ? 'Weather' : 'Flugwetter',
-          ),
-          if (widget.session.can('files_view'))
-            NavigationDestination(
-              icon: const Icon(Icons.folder_outlined),
-              selectedIcon: const Icon(Icons.folder_rounded),
-              label: english ? 'Files' : 'Dateien',
-            ),
-          if (widget.session.can('terminal_access'))
-            const NavigationDestination(
-              icon: Icon(Icons.terminal_outlined),
-              selectedIcon: Icon(Icons.terminal_rounded),
-              label: 'Terminal',
-            ),
-          if (widget.session.can('users_manage'))
-            NavigationDestination(
-              icon: const Icon(Icons.admin_panel_settings_outlined),
-              selectedIcon: const Icon(Icons.admin_panel_settings_rounded),
-              label: 'Admin',
-            ),
-          NavigationDestination(
-            icon: const Icon(Icons.apps_outlined),
-            selectedIcon: const Icon(Icons.apps_rounded),
-            label: english ? 'More' : 'Mehr',
-          ),
         ],
       ),
     );
   }
 }
 
+class PiQuickActions extends StatelessWidget {
+  final PiLayoutStyle style;
+  final List<String> keys;
+  final ValueChanged<String> onPressed;
+
+  const PiQuickActions({
+    super.key,
+    required this.style,
+    required this.keys,
+    required this.onPressed,
+  });
+
+  (IconData, String) _details(String key) => switch (key) {
+    'files' => (Icons.folder_rounded, 'Dateien'),
+    'more' => (Icons.photo_library_rounded, 'Medien & Mehr'),
+    'backups' => (Icons.backup_rounded, 'Backups'),
+    _ => (Icons.search_rounded, 'Suche'),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    if (style == PiLayoutStyle.compact) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            children: [
+              for (final key in keys)
+                ActionChip(
+                  avatar: Icon(_details(key).$1, size: 18),
+                  label: Text(_details(key).$2),
+                  onPressed: () => onPressed(key),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (style == PiLayoutStyle.classic) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              for (final key in keys)
+                OutlinedButton.icon(
+                  onPressed: () => onPressed(key),
+                  icon: Icon(_details(key).$1),
+                  label: Text(_details(key).$2),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 760;
+        return Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: [
+            for (final key in keys)
+              SizedBox(
+                width: wide
+                    ? (constraints.maxWidth - 36) / 4
+                    : (constraints.maxWidth - 12) / 2,
+                child: _QuickActionTile(
+                  style: style,
+                  icon: _details(key).$1,
+                  label: _details(key).$2,
+                  onTap: () => onPressed(key),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _QuickActionTile extends StatelessWidget {
+  final PiLayoutStyle style;
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _QuickActionTile({
+    required this.style,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: style == PiLayoutStyle.aurora
+              ? BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      colors.primary.withValues(alpha: .22),
+                      Colors.transparent,
+                    ],
+                  ),
+                )
+              : null,
+          child: Row(
+            children: [
+              Icon(icon, color: colors.primary),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Text(
+                  label,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+              const Icon(Icons.arrow_forward_rounded, size: 18),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class PiSystemGrid extends StatelessWidget {
+  final PiLayoutStyle style;
+  final List<Widget> children;
+
+  const PiSystemGrid({super.key, required this.style, required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final count = switch (style) {
+          PiLayoutStyle.commandCenter when constraints.maxWidth >= 900 => 4,
+          PiLayoutStyle.compact when constraints.maxWidth >= 760 => 4,
+          PiLayoutStyle.aurora when constraints.maxWidth >= 1050 => 4,
+          _ => 2,
+        };
+        return GridView.count(
+          crossAxisCount: count,
+          crossAxisSpacing: context.piDesign.sectionGap,
+          mainAxisSpacing: context.piDesign.sectionGap,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          mainAxisExtent: style == PiLayoutStyle.compact ? 138 : 165,
+          children: children,
+        );
+      },
+    );
+  }
+}
+
 class DashboardHeroCard extends StatelessWidget {
+  final PiLayoutStyle style;
   final bool connected;
   final bool loading;
   final String hostname;
@@ -1897,6 +2378,7 @@ class DashboardHeroCard extends StatelessWidget {
 
   const DashboardHeroCard({
     super.key,
+    required this.style,
     required this.connected,
     required this.loading,
     required this.hostname,
@@ -1913,64 +2395,87 @@ class DashboardHeroCard extends StatelessWidget {
     final statusColor = connected
         ? const Color(0xFF60E6A8)
         : Colors.orangeAccent;
+    final foreground = style == PiLayoutStyle.classic
+        ? colorScheme.onSurface
+        : Colors.white;
+    final gradient = switch (style) {
+      PiLayoutStyle.aurora => LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          accentColor.withValues(alpha: 0.98),
+          colorScheme.tertiary.withValues(alpha: 0.78),
+          const Color(0xFF19223A),
+        ],
+      ),
+      PiLayoutStyle.commandCenter => LinearGradient(
+        colors: [const Color(0xFF111A28), accentColor.withValues(alpha: .35)],
+      ),
+      PiLayoutStyle.compact => LinearGradient(
+        colors: [const Color(0xFF171D27), accentColor.withValues(alpha: .20)],
+      ),
+      PiLayoutStyle.classic => null,
+    };
 
     return Container(
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            accentColor.withValues(alpha: 0.98),
-            colorScheme.tertiary.withValues(alpha: 0.78),
-            const Color(0xFF19223A),
-          ],
+        color: style == PiLayoutStyle.classic ? colorScheme.surface : null,
+        gradient: gradient,
+        borderRadius: BorderRadius.circular(context.piDesign.radius + 4),
+        border: Border.all(
+          color: style == PiLayoutStyle.commandCenter
+              ? accentColor.withValues(alpha: .55)
+              : Colors.white.withValues(alpha: .08),
         ),
-        borderRadius: BorderRadius.circular(30),
-        boxShadow: [
-          BoxShadow(
-            color: accentColor.withValues(alpha: 0.20),
-            blurRadius: 30,
-            offset: const Offset(0, 14),
-          ),
-        ],
+        boxShadow: style == PiLayoutStyle.aurora
+            ? [
+                BoxShadow(
+                  color: accentColor.withValues(alpha: 0.20),
+                  blurRadius: 30,
+                  offset: const Offset(0, 14),
+                ),
+              ]
+            : null,
       ),
       child: Stack(
         children: [
-          Positioned(
-            right: -54,
-            top: -62,
-            child: Container(
-              width: 190,
-              height: 190,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.white.withValues(alpha: 0.08),
+          if (style == PiLayoutStyle.aurora)
+            Positioned(
+              right: -54,
+              top: -62,
+              child: Container(
+                width: 190,
+                height: 190,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withValues(alpha: 0.08),
+                ),
               ),
             ),
-          ),
-          Positioned(
-            right: 40,
-            bottom: -85,
-            child: Container(
-              width: 170,
-              height: 170,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.black.withValues(alpha: 0.10),
+          if (style == PiLayoutStyle.aurora)
+            Positioned(
+              right: 40,
+              bottom: -85,
+              child: Container(
+                width: 170,
+                height: 170,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.black.withValues(alpha: 0.10),
+                ),
               ),
             ),
-          ),
           Padding(
-            padding: const EdgeInsets.all(24),
+            padding: EdgeInsets.all(style == PiLayoutStyle.compact ? 16 : 24),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
                     Container(
-                      width: 52,
-                      height: 52,
+                      width: style == PiLayoutStyle.compact ? 42 : 52,
+                      height: style == PiLayoutStyle.compact ? 42 : 52,
                       decoration: BoxDecoration(
                         color: Colors.white.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(17),
@@ -1978,10 +2483,10 @@ class DashboardHeroCard extends StatelessWidget {
                           color: Colors.white.withValues(alpha: 0.16),
                         ),
                       ),
-                      child: const Icon(
+                      child: Icon(
                         Icons.developer_board_rounded,
-                        color: Colors.white,
-                        size: 28,
+                        color: foreground,
+                        size: style == PiLayoutStyle.compact ? 23 : 28,
                       ),
                     ),
                     const Spacer(),
@@ -2012,8 +2517,8 @@ class DashboardHeroCard extends StatelessWidget {
                                 : connected
                                 ? 'Online'
                                 : 'Offline',
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: foreground,
                               fontWeight: FontWeight.w700,
                             ),
                           ),
@@ -2022,12 +2527,17 @@ class DashboardHeroCard extends StatelessWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 24),
-                const Text(
-                  'Alles im Blick.',
+                SizedBox(height: style == PiLayoutStyle.compact ? 14 : 24),
+                Text(
+                  switch (style) {
+                    PiLayoutStyle.commandCenter => 'SERVER COMMAND CENTER',
+                    PiLayoutStyle.compact => 'Systemübersicht',
+                    PiLayoutStyle.classic => 'Raspberry Pi Übersicht',
+                    PiLayoutStyle.aurora => 'Alles im Blick.',
+                  },
                   style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 30,
+                    color: foreground,
+                    fontSize: style == PiLayoutStyle.compact ? 22 : 30,
                     height: 1.05,
                     fontWeight: FontWeight.w900,
                     letterSpacing: -0.8,
@@ -2037,7 +2547,7 @@ class DashboardHeroCard extends StatelessWidget {
                 Text(
                   hostname,
                   style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.76),
+                    color: foreground.withValues(alpha: 0.76),
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
                   ),
@@ -2048,11 +2558,13 @@ class DashboardHeroCard extends StatelessWidget {
                   runSpacing: 10,
                   children: [
                     _HeroMetric(
+                      foreground: foreground,
                       icon: Icons.favorite_rounded,
                       label: 'Status',
                       value: '$healthScore / 100',
                     ),
                     _HeroMetric(
+                      foreground: foreground,
                       icon: Icons.thermostat_rounded,
                       label: 'Temperatur',
                       value: temperature == null
@@ -2060,6 +2572,7 @@ class DashboardHeroCard extends StatelessWidget {
                           : '${temperature!.toStringAsFixed(1)} °C',
                     ),
                     _HeroMetric(
+                      foreground: foreground,
                       icon: Icons.schedule_rounded,
                       label: 'Laufzeit',
                       value: uptime,
@@ -2070,14 +2583,16 @@ class DashboardHeroCard extends StatelessWidget {
                   const SizedBox(height: 18),
                   FilledButton.icon(
                     onPressed: onOpenFiles,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      foregroundColor: const Color(0xFF10182A),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 18,
-                        vertical: 14,
-                      ),
-                    ),
+                    style: style == PiLayoutStyle.aurora
+                        ? FilledButton.styleFrom(
+                            backgroundColor: Colors.white,
+                            foregroundColor: const Color(0xFF10182A),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 18,
+                              vertical: 14,
+                            ),
+                          )
+                        : null,
                     icon: const Icon(Icons.folder_open_rounded),
                     label: const Text(
                       'Dateimanager öffnen',
@@ -2098,11 +2613,13 @@ class _HeroMetric extends StatelessWidget {
   final IconData icon;
   final String label;
   final String value;
+  final Color foreground;
 
   const _HeroMetric({
     required this.icon,
     required this.label,
     required this.value,
+    required this.foreground,
   });
 
   @override
@@ -2117,7 +2634,7 @@ class _HeroMetric extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: Colors.white70, size: 18),
+          Icon(icon, color: foreground.withValues(alpha: .72), size: 18),
           const SizedBox(width: 8),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2125,7 +2642,7 @@ class _HeroMetric extends StatelessWidget {
               Text(
                 label,
                 style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.62),
+                  color: foreground.withValues(alpha: 0.62),
                   fontSize: 10,
                   fontWeight: FontWeight.w600,
                 ),
@@ -2137,8 +2654,8 @@ class _HeroMetric extends StatelessWidget {
                   value,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white,
+                  style: TextStyle(
+                    color: foreground,
                     fontWeight: FontWeight.w800,
                   ),
                 ),

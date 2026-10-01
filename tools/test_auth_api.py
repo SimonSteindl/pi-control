@@ -64,7 +64,14 @@ def main():
 
         app_version = client.get("/api/app-version")
         assert app_version.status_code == 200, app_version.data
-        assert app_version.get_json()["latest_version"] == server.APP_VERSION
+        assert (
+            app_version.get_json()["latest_version"]
+            == server.ANDROID_APP_VERSION
+        )
+        assert (
+            app_version.get_json()["server_version"]
+            == server.SERVER_VERSION
+        )
 
         server.MAINTENANCE_FLAG = temp_path / "maintenance.enabled"
         server.MAINTENANCE_PAGE = temp_path / "maintenance.html"
@@ -252,6 +259,25 @@ def main():
         assert search.status_code == 200, search.data
         assert search.get_json()["results"][0]["path"] == "Dokumente/small.txt"
 
+        internal_version = server.FILE_ROOT.joinpath(
+            "users/viewer/.pi-control-versions/secret"
+        )
+        internal_version.mkdir(parents=True)
+        internal_version.joinpath("small-hidden.txt").write_text(
+            "",
+            encoding="utf-8",
+        )
+        global_search = client.get(
+            "/api/global-search?q=small",
+            headers=auth_header(viewer_token),
+        )
+        assert global_search.status_code == 200, global_search.data
+        global_results = global_search.get_json()["results"]
+        assert any(item["title"] == "small.txt" for item in global_results)
+        assert not any(
+            item["title"] == "small-hidden.txt" for item in global_results
+        )
+
         share = client.post(
             "/api/files/share",
             headers=auth_header(viewer_token),
@@ -335,16 +361,22 @@ def main():
             "users/viewer/Dokumente/small.txt"
         ).exists()
 
-        trash = client.get(
+        viewer_trash = client.get(
             "/api/files/trash",
             headers=auth_header(viewer_token),
+        )
+        assert viewer_trash.status_code == 403, viewer_trash.data
+
+        trash = client.get(
+            "/api/files/trash",
+            headers=auth_header(admin_token),
         )
         assert trash.status_code == 200, trash.data
         trash_item_id = trash.get_json()["items"][0]["id"]
 
         restored = client.post(
             "/api/files/trash/restore",
-            headers=auth_header(viewer_token),
+            headers=auth_header(admin_token),
             json={"id": trash_item_id},
         )
         assert restored.status_code == 200, restored.data
@@ -359,17 +391,17 @@ def main():
         )
         trash = client.get(
             "/api/files/trash",
-            headers=auth_header(viewer_token),
+            headers=auth_header(admin_token),
         ).get_json()
         permanently_deleted = client.post(
             "/api/files/trash/permanent-delete",
-            headers=auth_header(viewer_token),
+            headers=auth_header(admin_token),
             json={"id": trash["items"][0]["id"]},
         )
         assert permanently_deleted.status_code == 200, permanently_deleted.data
         assert client.get(
             "/api/files/trash",
-            headers=auth_header(viewer_token),
+            headers=auth_header(admin_token),
         ).get_json()["items"] == []
 
         assert client.open(

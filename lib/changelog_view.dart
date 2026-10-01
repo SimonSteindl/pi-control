@@ -12,6 +12,56 @@ class _ChangelogDialog extends StatelessWidget {
 
   static const entries = [
     _ChangelogEntry(
+      version: 'Web 2.4.0',
+      date: '4. September 2026',
+      title: 'Komplettes Design Studio',
+      highlights: [
+        'Aurora zeigt Pi Control großzügig, farbig und modern.',
+        'Command Center bringt eine echte Seitenleiste für große Bildschirme.',
+        'Kompakt verschiebt die Navigation nach oben und nutzt den Platz dichter.',
+        'Klassisch bleibt ruhig, flach und besonders übersichtlich.',
+        'Login, Dashboard, Dateien, Terminal, Admin, Wetter und Dialoge folgen jetzt demselben Design.',
+        'Sechs Akzentfarben und alle Layouts werden getrennt auf jedem Gerät gespeichert.',
+        'Mini-Vorschauen zeigen den Aufbau schon vor der Auswahl.',
+      ],
+    ),
+    _ChangelogEntry(
+      version: 'Web 2.3.2',
+      date: '25. August 2026',
+      title: 'Admin-Papierkorb und schnellerer Unterbau',
+      highlights: [
+        'Nur Administratoren sehen und öffnen den Papierkorb.',
+        'Die Beschränkung gilt zusätzlich direkt auf dem Server und kann nicht über die API umgangen werden.',
+        'Administratoren sehen die gelöschten Dateien aller Benutzer samt Benutzernamen.',
+        'Dateimanager und Dashboard ignorieren doppelte oder verspätete Netzwerkantworten.',
+        'Suche und Galerie überspringen interne Versions-, Papierkorb- und Tresordaten.',
+        'Weniger Dateisystemabfragen und flüssigere parallele Datenbankzugriffe.',
+      ],
+    ),
+    _ChangelogEntry(
+      version: '2.3.1',
+      date: '23. August 2026',
+      title: 'Schneller und sparsamer',
+      highlights: [
+        'Deutlich weniger Systemprozesse bei regelmäßigen Dashboard-Aktualisierungen.',
+        'HTTP-Verbindungen werden jetzt auch für Medien-Uploads wiederverwendet.',
+        'Handyfotos werden ohne unnötige Neuberechnung ihrer Dateigröße und in Originalqualität gesichert.',
+        'Galerievorschauen benötigen weniger Arbeitsspeicher und reagieren robuster auf defekte Dateien.',
+      ],
+    ),
+    _ChangelogEntry(
+      version: '2.3.0',
+      date: '23. August 2026',
+      title: 'Handyfotos direkt auf dem USB-Stick',
+      highlights: [
+        'Mehrere Fotos oder Videos lassen sich direkt aus der Handy-Mediathek sichern.',
+        'Die Dateien landen automatisch im persönlichen Ordner Mobile-Backups nach Datum sortiert.',
+        'Große Auswahlen werden zuverlässig in kleinere Upload-Pakete aufgeteilt.',
+        'Der Sicherungsbutton ist jetzt auch bei einer noch leeren Galerie sichtbar.',
+        'Weniger Netzwerkverkehr, Cache-Schreibzugriffe und Hintergrundlast.',
+      ],
+    ),
+    _ChangelogEntry(
       version: '2.2.0',
       date: '22. August 2026',
       title: 'NAS als WebDAV-Laufwerk',

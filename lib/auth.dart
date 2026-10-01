@@ -58,16 +58,25 @@ class AuthSession {
 
 class PiApiClient {
   static const _sessionTokenKey = 'pi_control_session_token';
+  static const publicServerBase =
+      'https://shape-squeegee-unblended.ngrok-free.dev/api';
   static const _secureStorage = FlutterSecureStorage();
 
   static final List<String> candidates = [
     if (kIsWeb) '${Uri.base.origin}/api',
     'http://192.168.0.123:8080/api',
+    publicServerBase,
     'http://100.73.19.27:8080/api',
   ];
 
   String activeBase = candidates.first;
   String? token;
+  final http.Client _httpClient;
+
+  PiApiClient({http.Client? httpClient})
+    : _httpClient = httpClient ?? http.Client();
+
+  void close() => _httpClient.close();
 
   Future<void> initialize() async {
     final preferences = await SharedPreferences.getInstance();
@@ -119,11 +128,17 @@ class PiApiClient {
   String get connectionName {
     if (kIsWeb && activeBase == '${Uri.base.origin}/api') return 'Website';
     if (activeBase.contains('100.73.19.27')) return 'Tailscale';
+    if (activeBase == publicServerBase) return 'Internet (HTTPS)';
+    if (activeBase.contains('.ngrok-free.dev')) return 'Internet (HTTPS)';
     return 'LAN';
   }
 
   Map<String, String> _headers(Map<String, String>? headers) {
-    return {if (token != null) 'Authorization': 'Bearer $token', ...?headers};
+    return {
+      'ngrok-skip-browser-warning': '1',
+      if (token != null) 'Authorization': 'Bearer $token',
+      ...?headers,
+    };
   }
 
   Future<http.Response> _request(
@@ -146,19 +161,19 @@ class PiApiClient {
         late final http.Response response;
 
         if (method == 'GET') {
-          response = await http
+          response = await _httpClient
               .get(uri, headers: mergedHeaders)
               .timeout(timeout);
         } else if (method == 'POST') {
-          response = await http
+          response = await _httpClient
               .post(uri, headers: mergedHeaders, body: body)
               .timeout(timeout);
         } else if (method == 'PATCH') {
-          response = await http
+          response = await _httpClient
               .patch(uri, headers: mergedHeaders, body: body)
               .timeout(timeout);
         } else if (method == 'DELETE') {
-          response = await http
+          response = await _httpClient
               .delete(uri, headers: mergedHeaders, body: body)
               .timeout(timeout);
         } else {
@@ -226,6 +241,21 @@ class PiApiClient {
       body: body,
       timeout: timeout,
     );
+  }
+
+  Future<http.StreamedResponse> send(
+    http.BaseRequest request, {
+    Duration timeout = const Duration(minutes: 10),
+  }) {
+    request.headers.putIfAbsent('ngrok-skip-browser-warning', () => '1');
+    final sessionToken = token;
+    if (sessionToken != null) {
+      request.headers.putIfAbsent(
+        'Authorization',
+        () => 'Bearer $sessionToken',
+      );
+    }
+    return _httpClient.send(request).timeout(timeout);
   }
 
   Map<String, dynamic> decodeObject(http.Response response) {

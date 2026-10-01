@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import 'auth.dart';
+import 'layout_system.dart';
 
 class LoginScreen extends StatefulWidget {
   final PiApiClient client;
@@ -84,7 +85,16 @@ class _LoginScreenState extends State<LoginScreen> {
                         ? Icons.radio_button_checked
                         : Icons.radio_button_off,
                   ),
-                  title: Text(base),
+                  title: Text(
+                    base == PiApiClient.publicServerBase
+                        ? 'Von überall (HTTPS)'
+                        : base,
+                  ),
+                  subtitle: base == PiApiClient.publicServerBase
+                      ? const Text(
+                          'Öffentlicher, geschützter Pi-Control-Zugang',
+                        )
+                      : null,
                 ),
               ),
               const Divider(),
@@ -122,6 +132,29 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final design = context.piDesign;
+    final backgroundColors = switch (design.style) {
+      PiLayoutStyle.aurora => [
+        widget.accentColor.withValues(alpha: 0.28),
+        const Color(0xFF0A0F1C),
+        const Color(0xFF070B14),
+      ],
+      PiLayoutStyle.commandCenter => const [
+        Color(0xFF111927),
+        Color(0xFF070B12),
+        Color(0xFF05070B),
+      ],
+      PiLayoutStyle.compact => const [
+        Color(0xFF171B22),
+        Color(0xFF0B0E13),
+        Color(0xFF080A0D),
+      ],
+      PiLayoutStyle.classic => const [
+        Color(0xFF232933),
+        Color(0xFF101318),
+        Color(0xFF0D1014),
+      ],
+    };
 
     return Scaffold(
       body: Stack(
@@ -132,27 +165,24 @@ class _LoginScreenState extends State<LoginScreen> {
                 gradient: RadialGradient(
                   center: const Alignment(-0.8, -0.8),
                   radius: 1.45,
-                  colors: [
-                    widget.accentColor.withValues(alpha: 0.28),
-                    const Color(0xFF0A0F1C),
-                    const Color(0xFF070B14),
-                  ],
+                  colors: backgroundColors,
                 ),
               ),
             ),
           ),
-          Positioned(
-            right: -100,
-            top: -120,
-            child: Container(
-              width: 360,
-              height: 360,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: colorScheme.tertiary.withValues(alpha: 0.08),
+          if (design.style == PiLayoutStyle.aurora)
+            Positioned(
+              right: -100,
+              top: -120,
+              child: Container(
+                width: 360,
+                height: 360,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: colorScheme.tertiary.withValues(alpha: 0.08),
+                ),
               ),
             ),
-          ),
           SafeArea(
             child: Align(
               alignment: Alignment.topRight,
@@ -169,7 +199,7 @@ class _LoginScreenState extends State<LoginScreen> {
           SafeArea(
             child: Center(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
+                padding: EdgeInsets.all(design.pagePadding + 4),
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 980),
                   child: LayoutBuilder(
@@ -203,7 +233,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         return Row(
                           children: [
                             Expanded(child: intro),
-                            const SizedBox(width: 46),
+                            SizedBox(width: design.dense ? 28 : 46),
                             SizedBox(width: 410, child: form),
                           ],
                         );

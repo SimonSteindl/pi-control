@@ -11,6 +11,12 @@ Aktuelle Adresse:
 Es sind keine Domain, keine Router-Portfreigabe und kein Tailscale-Client auf
 dem besuchten Gerät notwendig.
 
+Die Android-App probiert bei Verbindungsproblemen automatisch Heimnetz, diese
+öffentliche HTTPS-Adresse und danach Tailscale. Bei der Anmeldung
+kann „Von überall (HTTPS)“ auch direkt ausgewählt werden. Die Anmeldung bleibt
+durch Pi-Control-Benutzerkonten und Berechtigungen geschützt; verwende ein
+starkes, einzigartiges Passwort und teile den Tunnel-Link nicht öffentlich.
+
 ## Aufbau
 
 - Flutter-Webbuild: `/home/stoney22/pi-control/web`

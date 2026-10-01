@@ -14,6 +14,7 @@ import signal
 import shutil
 import socket
 import sqlite3
+import stat
 import subprocess
 import tempfile
 import threading
@@ -49,7 +50,8 @@ BACKUP_DIRECTORY = Path(USB_PATH) / "Backups" / "Pi-Control"
 BACKUP_SCRIPT = BASE_DIR / "backup.sh"
 MAINTENANCE_FLAG = BASE_DIR / "maintenance.enabled"
 MAINTENANCE_PAGE = BASE_DIR / "maintenance.html"
-APP_VERSION = "2.2.0"
+SERVER_VERSION = "2.3.2"
+ANDROID_APP_VERSION = "2.3.1"
 
 HISTORY_INTERVAL_SECONDS = 60
 HISTORY_MAX_POINTS = 24 * 60
@@ -73,9 +75,15 @@ aviation_weather_lock = threading.Lock()
 aviation_weather_cache = {}
 AVIATION_WEATHER_CACHE_SECONDS = 60
 
+system_status_lock = threading.Lock()
+system_status_cache = {}
+system_status_cached_at = 0.0
+SYSTEM_STATUS_CACHE_SECONDS = 30
+
 BENCHMARK_HISTORY_MAX_POINTS = 50
 
 FILE_ROOT = Path(USB_PATH)
+MOUNTINFO_FILE = Path("/proc/self/mountinfo")
 FILE_OWNER_USER = "stoney22"
 file_operation_lock = threading.Lock()
 webdav_lock = threading.Lock()
@@ -86,6 +94,11 @@ SHARE_LINK_LIFETIME_SECONDS = 7 * 24 * 60 * 60
 TRASH_DIRECTORY_NAME = ".pi-control-trash"
 VERSIONS_DIRECTORY_NAME = ".pi-control-versions"
 VAULTS_DIRECTORY_NAME = ".pi-control-vaults"
+INTERNAL_FILE_DIRECTORY_NAMES = frozenset({
+    TRASH_DIRECTORY_NAME,
+    VERSIONS_DIRECTORY_NAME,
+    VAULTS_DIRECTORY_NAME,
+})
 SEARCH_RESULT_LIMIT = 100
 SEARCH_VISIT_LIMIT = 25000
 
@@ -157,6 +170,11 @@ def initialize_auth_database():
     BASE_DIR.mkdir(parents=True, exist_ok=True)
 
     with auth_connection() as connection:
+        # WAL keeps reads responsive while another request writes a session,
+        # audit entry or file record. NORMAL is durable enough for WAL while
+        # avoiding an fsync for every small transaction on the SD card.
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA synchronous = NORMAL")
         connection.executescript("""
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -635,7 +653,11 @@ def authenticated_user():
     return row
 
 
-def authentication_required(permission=None, allow_password_change=False):
+def authentication_required(
+    permission=None,
+    allow_password_change=False,
+    admin_only=False,
+):
     def decorator(function):
         @wraps(function)
         def wrapped(*args, **kwargs):
@@ -654,6 +676,13 @@ def authentication_required(permission=None, allow_password_change=False):
                     "error": "Bitte zuerst das Passwort ändern.",
                     "code": "password_change_required",
                 }), 428
+
+            if admin_only and not bool(user["is_admin"]):
+                return jsonify({
+                    "ok": False,
+                    "error": "Diese Funktion ist nur für Administratoren verfügbar.",
+                    "code": "admin_required",
+                }), 403
 
             permissions = (
                 ALL_PERMISSIONS
@@ -1030,6 +1059,35 @@ def get_tailscale():
     }
 
 
+def is_path_mounted(path):
+    """Return True for regular mounts and same-filesystem bind mounts."""
+    resolved_path = str(Path(path).resolve(strict=False))
+    if os.path.ismount(resolved_path):
+        return True
+
+    try:
+        mountinfo = MOUNTINFO_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    for line in mountinfo.splitlines():
+        fields = line.split()
+        if len(fields) < 5:
+            continue
+        mount_point = fields[4]
+        for escaped, character in (
+            ("\\040", " "),
+            ("\\011", "\t"),
+            ("\\012", "\n"),
+            ("\\134", "\\"),
+        ):
+            mount_point = mount_point.replace(escaped, character)
+        if os.path.realpath(mount_point) == resolved_path:
+            return True
+
+    return False
+
+
 def get_lan_ip():
     code, output, _ = run_command(
         ["hostname", "-I"],
@@ -1206,15 +1264,43 @@ def build_alerts(info):
     return alerts
 
 
+def collect_system_status():
+    """Cache slow-changing values that otherwise spawn processes every poll."""
+    global system_status_cache, system_status_cached_at
+
+    now = time.monotonic()
+    with system_status_lock:
+        if (
+            system_status_cache
+            and now - system_status_cached_at < SYSTEM_STATUS_CACHE_SECONDS
+        ):
+            return dict(system_status_cache)
+
+        status = {
+            "hostname": socket.gethostname(),
+            "ip": get_lan_ip(),
+            "samba": service_running("smbd"),
+            "tailscale": get_tailscale(),
+            "kernel": platform.release(),
+            "model": get_model(),
+            "os": get_os_name(),
+        }
+        system_status_cache = status
+        system_status_cached_at = time.monotonic()
+        return dict(status)
+
+
 def collect_info():
     usb = None
 
-    if os.path.ismount(USB_PATH):
+    if is_path_mounted(USB_PATH):
         usb = get_disk(USB_PATH)
 
+    status = collect_system_status()
+
     info = {
-        "hostname": socket.gethostname(),
-        "ip": get_lan_ip(),
+        "hostname": status["hostname"],
+        "ip": status["ip"],
         "temperature": get_temperature(),
         "cpu": {
             "usage": get_cpu_usage(),
@@ -1224,15 +1310,15 @@ def collect_info():
         "sd": get_disk("/"),
         "usb": usb,
         "usb_path": USB_PATH,
-        "samba": service_running("smbd"),
-        "tailscale": get_tailscale(),
+        "samba": status["samba"],
+        "tailscale": status["tailscale"],
         "uptime": get_uptime(),
-        "kernel": platform.release(),
+        "kernel": status["kernel"],
         "benchmark": get_benchmark_summary(),
         "system": {
-            "model": get_model(),
-            "os": get_os_name(),
-            "kernel": platform.release(),
+            "model": status["model"],
+            "os": status["os"],
+            "kernel": status["kernel"],
             "load_average": get_load_average(),
             "notifications": (
                 f"ntfy.sh/{NTFY_TOPIC}"
@@ -2095,7 +2181,7 @@ def file_api_error(message, status=400):
 
 
 def require_file_root():
-    if not FILE_ROOT.exists() or not os.path.ismount(FILE_ROOT):
+    if not FILE_ROOT.exists() or not is_path_mounted(FILE_ROOT):
         raise RuntimeError("Der NAS-/USB-Speicher ist nicht eingehängt.")
 
     return FILE_ROOT.resolve(strict=True)
@@ -2149,7 +2235,7 @@ def set_file_owner(path, directory=False):
 def resolve_file_path(relative_path=""):
     root, _, _ = assigned_file_root()
     normalized = str(relative_path or "").replace("\\", "/").lstrip("/")
-    if normalized.split("/", 1)[0] in {TRASH_DIRECTORY_NAME, VERSIONS_DIRECTORY_NAME, VAULTS_DIRECTORY_NAME}:
+    if normalized.split("/", 1)[0] in INTERNAL_FILE_DIRECTORY_NAMES:
         raise ValueError("Dieser interne Ordner ist geschützt.")
     candidate = (root / normalized).resolve(strict=False)
 
@@ -2207,20 +2293,30 @@ def relative_file_path(root, path):
 
 
 def describe_file(root, path):
-    stat = path.stat()
-    is_directory = path.is_dir()
+    file_stat = path.stat()
+    is_directory = stat.S_ISDIR(file_stat.st_mode)
 
     return {
         "name": path.name,
         "path": relative_file_path(root, path),
         "is_directory": is_directory,
-        "size": None if is_directory else stat.st_size,
-        "modified": int(stat.st_mtime),
+        "size": None if is_directory else file_stat.st_size,
+        "modified": int(file_stat.st_mtime),
     }
 
 
 def hidden_file_entry(path):
-    return path.name in {TRASH_DIRECTORY_NAME, VERSIONS_DIRECTORY_NAME, VAULTS_DIRECTORY_NAME}
+    return path.name in INTERNAL_FILE_DIRECTORY_NAMES
+
+
+def prune_file_walk(current, directories):
+    """Keep recursive user-facing scans inside visible, real directories."""
+    directories[:] = [
+        name
+        for name in directories
+        if name not in INTERNAL_FILE_DIRECTORY_NAMES
+        and not (Path(current) / name).is_symlink()
+    ]
 
 
 def version_directory(root, relative_path):
@@ -2820,11 +2916,7 @@ def api_files_search():
         visited = 0
 
         for current, directories, files in os.walk(root, followlinks=False):
-            directories[:] = [
-                name for name in directories
-                if name != TRASH_DIRECTORY_NAME
-                and not (Path(current) / name).is_symlink()
-            ]
+            prune_file_walk(current, directories)
 
             for name in [*directories, *files]:
                 visited += 1
@@ -3086,33 +3178,36 @@ def api_files_delete():
 
 
 @app.get("/api/files/trash")
-@authentication_required("files_manage")
+@authentication_required("files_manage", admin_only=True)
 def api_files_trash():
     try:
-        root, _, _ = assigned_file_root()
         with auth_connection() as connection:
             rows = connection.execute(
                 """
-                SELECT id, root_path, original_path, display_name,
-                       is_directory, deleted_at
+                SELECT trash_items.id, trash_items.root_path,
+                       trash_items.original_path, trash_items.display_name,
+                       trash_items.is_directory, trash_items.deleted_at,
+                       users.username AS deleted_by
                 FROM trash_items
-                WHERE user_id = ?
-                ORDER BY deleted_at DESC, id DESC
+                JOIN users ON users.id = trash_items.user_id
+                ORDER BY trash_items.deleted_at DESC, trash_items.id DESC
                 """,
-                (current_user_id(),),
             ).fetchall()
 
-        items = [
-            {
+        items = []
+        for row in rows:
+            try:
+                admin_trash_root(row)
+            except (OSError, ValueError):
+                continue
+            items.append({
                 "id": row["id"],
                 "name": row["display_name"],
                 "original_path": row["original_path"],
                 "is_directory": bool(row["is_directory"]),
                 "deleted_at": row["deleted_at"],
-            }
-            for row in rows
-            if Path(row["root_path"]).resolve(strict=False) == root
-        ]
+                "deleted_by": row["deleted_by"],
+            })
         return jsonify({"ok": True, "items": items})
     except (OSError, RuntimeError, ValueError) as exc:
         return file_api_error(str(exc), 409)
@@ -3121,13 +3216,20 @@ def api_files_trash():
 def get_trash_item(item_id):
     with auth_connection() as connection:
         return connection.execute(
-            "SELECT * FROM trash_items WHERE id = ? AND user_id = ?",
-            (item_id, current_user_id()),
+            "SELECT * FROM trash_items WHERE id = ?",
+            (item_id,),
         ).fetchone()
 
 
+def admin_trash_root(row):
+    file_root = FILE_ROOT.resolve(strict=True)
+    stored_root = Path(row["root_path"]).resolve(strict=True)
+    stored_root.relative_to(file_root)
+    return stored_root
+
+
 @app.post("/api/files/trash/restore")
-@authentication_required("files_manage")
+@authentication_required("files_manage", admin_only=True)
 def api_files_trash_restore():
     payload = request.get_json(silent=True) or {}
     try:
@@ -3136,12 +3238,9 @@ def api_files_trash_restore():
         if row is None:
             return file_api_error("Papierkorb-Eintrag nicht gefunden.", 404)
 
-        current_root, _, _ = assigned_file_root()
-        stored_root = Path(row["root_path"]).resolve(strict=True)
-        if stored_root != current_root:
-            return file_api_error("Der ursprüngliche Speicherordner ist nicht mehr zugewiesen.", 409)
+        stored_root = admin_trash_root(row)
 
-        source = trash_directory(current_root) / row["trash_name"]
+        source = trash_directory(stored_root) / row["trash_name"]
         _, target = resolve_stored_file(stored_root, row["original_path"])
         if not source.exists():
             return file_api_error("Die Datei ist nicht mehr im Papierkorb.", 404)
@@ -3154,13 +3253,13 @@ def api_files_trash_restore():
             with auth_connection() as connection:
                 connection.execute("DELETE FROM trash_items WHERE id = ?", (item_id,))
 
-        return jsonify({"ok": True, "path": relative_file_path(current_root, target)})
+        return jsonify({"ok": True, "path": relative_file_path(stored_root, target)})
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         return file_api_error(str(exc), 409)
 
 
 @app.post("/api/files/trash/permanent-delete")
-@authentication_required("files_manage")
+@authentication_required("files_manage", admin_only=True)
 def api_files_trash_permanent_delete():
     payload = request.get_json(silent=True) or {}
     try:
@@ -3169,12 +3268,9 @@ def api_files_trash_permanent_delete():
         if row is None:
             return file_api_error("Papierkorb-Eintrag nicht gefunden.", 404)
 
-        current_root, _, _ = assigned_file_root()
-        stored_root = Path(row["root_path"]).resolve(strict=True)
-        if stored_root != current_root:
-            return file_api_error("Der Speicherordner ist nicht mehr zugewiesen.", 409)
+        stored_root = admin_trash_root(row)
 
-        trash = trash_directory(current_root).resolve(strict=True)
+        trash = trash_directory(stored_root).resolve(strict=True)
         target = (trash / row["trash_name"]).resolve(strict=False)
         try:
             target.relative_to(trash)
@@ -3697,12 +3793,15 @@ def api_files_gallery():
     root, _, _ = assigned_file_root()
     items = []
     for current, directories, files in os.walk(root, followlinks=False):
-        directories[:] = [name for name in directories if name != TRASH_DIRECTORY_NAME and not name.startswith(".pi-control-")]
+        prune_file_walk(current, directories)
         for name in files:
+            path = Path(current) / name
+            if path.is_symlink():
+                continue
             if Path(name).suffix.casefold() not in extensions:
                 continue
             try:
-                items.append(describe_file(root, Path(current) / name))
+                items.append(describe_file(root, path))
             except OSError:
                 continue
             if len(items) >= 500:
@@ -4166,11 +4265,13 @@ def api_global_search():
         root, _, _ = assigned_file_root()
         visited = 0
         for current, directories, files in os.walk(root, followlinks=False):
-            directories[:] = [name for name in directories if name != TRASH_DIRECTORY_NAME]
+            prune_file_walk(current, directories)
             for name in [*directories, *files]:
                 visited += 1
                 if query in name.casefold():
                     path = Path(current) / name
+                    if path.is_symlink():
+                        continue
                     results.append({"type": "file", "title": name, "subtitle": relative_file_path(root, path)})
                 if len(results) >= 50 or visited >= SEARCH_VISIT_LIMIT:
                     break
@@ -4218,7 +4319,7 @@ def fetch_aviation_weather_product(product, icao):
         headers={
             "Accept": "application/json",
             "User-Agent": (
-                "Pi-Control/2.2.0 "
+                f"Pi-Control/{SERVER_VERSION} "
                 "(https://github.com/SimonSteindl/pi-control)"
             ),
         },
@@ -4282,17 +4383,18 @@ def api_aviation_weather():
 def api_app_version():
     return jsonify({
         "ok": True,
-        "latest_version": APP_VERSION,
-        "android_download": f"/api/app-update/android/{APP_VERSION}",
+        "latest_version": ANDROID_APP_VERSION,
+        "android_download": f"/api/app-update/android/{ANDROID_APP_VERSION}",
+        "server_version": SERVER_VERSION,
         "ios_distribution": "TestFlight/App Store wird vorbereitet",
     })
 
 
 @app.get("/api/app-update/android/<version>")
 def api_app_update_android(version):
-    if version != APP_VERSION:
+    if version != ANDROID_APP_VERSION:
         return file_api_error("Diese App-Version ist nicht verfügbar.", 404)
-    apk = FILE_ROOT / "App" / ".apk" / f"Pi-Control-{APP_VERSION}.apk"
+    apk = FILE_ROOT / "App" / ".apk" / f"Pi-Control-{ANDROID_APP_VERSION}.apk"
     if not apk.exists() or not apk.is_file():
         return file_api_error("Die Android-Aktualisierung ist noch nicht veröffentlicht.", 404)
     return send_file(apk, as_attachment=True, download_name=apk.name)

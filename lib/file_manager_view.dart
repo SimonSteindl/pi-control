@@ -33,6 +33,7 @@ class FileManagerView extends StatefulWidget {
   final String username;
   final bool canUpload;
   final bool canManage;
+  final bool isAdmin;
   final Color accentColor;
 
   const FileManagerView({
@@ -44,6 +45,7 @@ class FileManagerView extends StatefulWidget {
     required this.username,
     required this.canUpload,
     required this.canManage,
+    required this.isAdmin,
     required this.accentColor,
   });
 
@@ -69,6 +71,7 @@ class _FileManagerViewState extends State<FileManagerView> {
   final TextEditingController _searchController = TextEditingController();
   final Set<String> _selectedPaths = <String>{};
   final Set<String> _favoritePaths = <String>{};
+  int _loadGeneration = 0;
   String? _error;
 
   @override
@@ -201,6 +204,7 @@ class _FileManagerViewState extends State<FileManagerView> {
 
   Future<void> _load({String? path}) async {
     final targetPath = path ?? _path;
+    final generation = ++_loadGeneration;
 
     setState(() {
       _loading = true;
@@ -227,7 +231,7 @@ class _FileManagerViewState extends State<FileManagerView> {
         }
       }
 
-      if (!mounted) return;
+      if (!mounted || generation != _loadGeneration) return;
 
       setState(() {
         _selectedPaths.clear();
@@ -246,7 +250,7 @@ class _FileManagerViewState extends State<FileManagerView> {
         _error = null;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _loadGeneration) return;
 
       setState(() {
         _loading = false;
@@ -1345,7 +1349,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                           icon: const Icon(Icons.create_new_folder_outlined),
                           label: const Text('Neuer Ordner'),
                         ),
-                      if (widget.canManage)
+                      if (widget.isAdmin)
                         OutlinedButton.icon(
                           onPressed: _openTrash,
                           icon: const Icon(Icons.delete_sweep_outlined),
@@ -2110,7 +2114,7 @@ class _TrashDialogState extends State<_TrashDialog> {
                           ),
                           title: Text(item.name),
                           subtitle: Text(
-                            '${item.originalPath}\nGelöscht: ${_formatDate(item.deletedAt)}',
+                            '${item.originalPath}\nGelöscht von ${item.deletedBy}: ${_formatDate(item.deletedAt)}',
                           ),
                           isThreeLine: true,
                           trailing: PopupMenuButton<String>(
@@ -2156,6 +2160,7 @@ class _TrashItem {
   final int id;
   final String name;
   final String originalPath;
+  final String deletedBy;
   final bool isDirectory;
   final DateTime deletedAt;
 
@@ -2163,6 +2168,7 @@ class _TrashItem {
     required this.id,
     required this.name,
     required this.originalPath,
+    required this.deletedBy,
     required this.isDirectory,
     required this.deletedAt,
   });
@@ -2173,6 +2179,7 @@ class _TrashItem {
       id: (json['id'] as num?)?.toInt() ?? 0,
       name: json['name']?.toString() ?? 'Unbekannt',
       originalPath: json['original_path']?.toString() ?? '',
+      deletedBy: json['deleted_by']?.toString() ?? 'unbekannt',
       isDirectory: json['is_directory'] == true,
       deletedAt: DateTime.fromMillisecondsSinceEpoch(
         (deleted is num ? deleted.toInt() : 0) * 1000,
