@@ -1,2 +1,0 @@
-Pi Control is now open source under Apache 2.0 and prepared for free
-distribution through F-Droid, Galaxy Store, and AppGallery.
