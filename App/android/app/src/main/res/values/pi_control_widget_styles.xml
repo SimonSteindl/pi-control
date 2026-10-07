@@ -1,0 +1,54 @@
+<resources>
+    <string name="pi_control_compact_widget_description">Kompakter Pi-Status direkt auf dem Startbildschirm</string>
+    <string name="pi_control_status_widget_description">CPU, RAM, Temperatur und SD-Karte des Raspberry Pi</string>
+    <string name="pi_control_large_widget_description">Große Übersicht mit Raspberry-Pi-Systemstatus</string>
+    <color name="pi_widget_green">#61E294</color>
+    <color name="pi_widget_amber">#FFC857</color>
+    <color name="pi_widget_red">#FF7185</color>
+    <style name="PiWidgetMetric">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">match_parent</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:orientation">vertical</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:paddingStart">5dp</item>
+    </style>
+    <style name="PiWidgetLabel">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textColor">#AAB9D2</item>
+        <item name="android:textSize">9sp</item>
+    </style>
+    <style name="PiWidgetValue">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginBottom">4dp</item>
+        <item name="android:textColor">#FFFFFF</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+    <style name="PiWidgetLargeMetric">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">match_parent</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:orientation">vertical</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:paddingStart">7dp</item>
+    </style>
+    <style name="PiWidgetLargeLabel">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:textColor">#AAB9D2</item>
+        <item name="android:textSize">10sp</item>
+    </style>
+    <style name="PiWidgetLargeValue">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginTop">5dp</item>
+        <item name="android:textColor">#FFFFFF</item>
+        <item name="android:textSize">23sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+</resources>

@@ -1,0 +1,10 @@
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/pi_control_large_widget_description"
+    android:initialLayout="@layout/pi_control_large_widget"
+    android:minWidth="260dp"
+    android:minHeight="130dp"
+    android:minResizeWidth="250dp"
+    android:minResizeHeight="120dp"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />

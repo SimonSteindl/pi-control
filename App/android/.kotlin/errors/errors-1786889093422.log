@@ -1,0 +1,48 @@
+kotlin version: 2.4.0
+error message: The daemon has terminated unexpectedly on startup attempt #1 with exit code: 1. The daemon process output:
+    ... (58 more lines)
+    59. 	at java.base/java.io.IoOverNioFileSystem.createFileExclusively(Unknown Source)
+    60. 	at java.base/java.io.File.createNewFile(Unknown Source)
+    61. 	at org.jetbrains.kotlin.daemon.CompileServiceImplBase.<init>(CompileServiceImpl.kt:264)
+    62. 	... 6 more
+    63. Caused by: java.nio.file.FileSystemException: C:\Users\steindm\AppData\Local\kotlin\daemon\kotlin-daemon.2026-08-16T14-06-00.151Z.ce726eda37068e2f8031a003da8d0eea.17857.run: There is not enough space on the disk
+    64. 	at java.base/sun.nio.fs.WindowsException.translateToIOException(Unknown Source)
+    65. 	at java.base/sun.nio.fs.WindowsException.rethrowAsIOException(Unknown Source)
+    66. 	at java.base/sun.nio.fs.WindowsException.rethrowAsIOException(Unknown Source)
+    67. 	at java.base/sun.nio.fs.WindowsFileSystemProvider.newByteChannel(Unknown Source)
+    68. 	... 10 more
+The daemon didn't produce the message "Kotlin compile daemon is ready" during startup.
+
+error message: The daemon has terminated unexpectedly on startup attempt #2 with exit code: 1. The daemon process output:
+    ... (58 more lines)
+    59. 	at java.base/java.io.IoOverNioFileSystem.createFileExclusively(Unknown Source)
+    60. 	at java.base/java.io.File.createNewFile(Unknown Source)
+    61. 	at org.jetbrains.kotlin.daemon.CompileServiceImplBase.<init>(CompileServiceImpl.kt:264)
+    62. 	... 6 more
+    63. Caused by: java.nio.file.FileSystemException: C:\Users\steindm\AppData\Local\kotlin\daemon\kotlin-daemon.2026-08-16T14-06-01.142Z.ce726eda37068e2f8031a003da8d0eea.17899.run: There is not enough space on the disk
+    64. 	at java.base/sun.nio.fs.WindowsException.translateToIOException(Unknown Source)
+    65. 	at java.base/sun.nio.fs.WindowsException.rethrowAsIOException(Unknown Source)
+    66. 	at java.base/sun.nio.fs.WindowsException.rethrowAsIOException(Unknown Source)
+    67. 	at java.base/sun.nio.fs.WindowsFileSystemProvider.newByteChannel(Unknown Source)
+    68. 	... 10 more
+Problems may have occurred during auto-selection of GC. The preferred GC is Parallel GC.
+If the problems persist, try adding the JVM option to the Kotlin daemon JVM arguments: -XX:-UseParallelGC.
+GC auto-selection logic is disabled temporary for the next daemon startup.
+The daemon didn't produce the message "Kotlin compile daemon is ready" during startup.
+
+error message: The daemon has terminated unexpectedly on startup attempt #3 with exit code: 1. The daemon process output:
+    ... (58 more lines)
+    59. 	at java.base/java.io.IoOverNioFileSystem.createFileExclusively(Unknown Source)
+    60. 	at java.base/java.io.File.createNewFile(Unknown Source)
+    61. 	at org.jetbrains.kotlin.daemon.CompileServiceImplBase.<init>(CompileServiceImpl.kt:264)
+    62. 	... 6 more
+    63. Caused by: java.nio.file.FileSystemException: C:\Users\steindm\AppData\Local\kotlin\daemon\kotlin-daemon.2026-08-16T14-06-02.133Z.ce726eda37068e2f8031a003da8d0eea.17650.run: There is not enough space on the disk
+    64. 	at java.base/sun.nio.fs.WindowsException.translateToIOException(Unknown Source)
+    65. 	at java.base/sun.nio.fs.WindowsException.rethrowAsIOException(Unknown Source)
+    66. 	at java.base/sun.nio.fs.WindowsException.rethrowAsIOException(Unknown Source)
+    67. 	at java.base/sun.nio.fs.WindowsFileSystemProvider.newByteChannel(Unknown Source)
+    68. 	... 10 more
+The daemon didn't produce the message "Kotlin compile daemon is ready" during startup.
+
+error message: Failed connecting to the daemon in 4 retries
+

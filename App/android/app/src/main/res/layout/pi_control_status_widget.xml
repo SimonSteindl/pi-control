@@ -1,0 +1,68 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/pi_control_widget_bg"
+    android:orientation="vertical"
+    android:padding="14dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+        <ImageView
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:contentDescription="Pi Control Logo"
+            android:scaleType="fitCenter"
+            android:src="@drawable/pi_control_logo" />
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="9dp"
+            android:layout_weight="1"
+            android:text="Pi Control"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+        <TextView
+            android:id="@+id/widget_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="APP ÖFFNEN"
+            android:textColor="#FFC857"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="10dp"
+        android:layout_weight="1"
+        android:orientation="horizontal">
+        <LinearLayout style="@style/PiWidgetMetric">
+            <TextView style="@style/PiWidgetLabel" android:text="CPU" />
+            <TextView android:id="@+id/widget_cpu" style="@style/PiWidgetValue" android:text="—%" />
+            <TextView style="@style/PiWidgetLabel" android:text="RAM" />
+            <TextView android:id="@+id/widget_ram" style="@style/PiWidgetValue" android:text="—%" />
+        </LinearLayout>
+        <LinearLayout style="@style/PiWidgetMetric">
+            <TextView style="@style/PiWidgetLabel" android:text="TEMPERATUR" />
+            <TextView android:id="@+id/widget_temperature" style="@style/PiWidgetValue" android:text="— °C" />
+            <TextView style="@style/PiWidgetLabel" android:text="SD-KARTE" />
+            <TextView android:id="@+id/widget_sd" style="@style/PiWidgetValue" android:text="—%" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/widget_updated"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="Pi Control öffnen, um Daten zu laden"
+        android:textColor="#AAB9D2"
+        android:textSize="10sp" />
+</LinearLayout>
