@@ -1085,6 +1085,7 @@ class _SystemToolsTab extends StatefulWidget {
 
 class _SystemToolsTabState extends State<_SystemToolsTab> {
   Map<String, dynamic> storage = {};
+  Map<String, dynamic> systemInfo = {};
   List<dynamic> devices = [];
   List<dynamic> containers = [];
   List<dynamic> events = [];
@@ -1106,6 +1107,7 @@ class _SystemToolsTabState extends State<_SystemToolsTab> {
       widget.client.get('docker/containers'),
       widget.client.get('audit?limit=50'),
       widget.client.get('scheduled-tasks'),
+      widget.client.get('info'),
     ]);
     if (!mounted) return;
     setState(() {
@@ -1116,6 +1118,7 @@ class _SystemToolsTabState extends State<_SystemToolsTab> {
           widget.client.decodeObject(results[2])['containers'] as List? ?? [];
       events = widget.client.decodeObject(results[3])['events'] as List? ?? [];
       tasks = widget.client.decodeObject(results[4])['tasks'] as List? ?? [];
+      systemInfo = widget.client.decodeObject(results[5]);
       loading = false;
     });
   }
@@ -1194,6 +1197,61 @@ class _SystemToolsTabState extends State<_SystemToolsTab> {
     if (response.statusCode == 200) await load();
   }
 
+  Future<void> runSystemAction(String action) async {
+    final isReboot = action == 'reboot';
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        icon: Icon(isReboot ? Icons.restart_alt_rounded : Icons.build_circle_outlined),
+        title: Text(isReboot ? 'Raspberry Pi neu starten?' : 'Dienst neu starten?'),
+        content: Text(
+          isReboot
+              ? 'Der Raspberry Pi und alle Dienste sind kurzzeitig nicht erreichbar.'
+              : '${action == 'samba' ? 'Samba / NAS-Dateifreigabe' : 'Tailscale / Fernzugriff'} wird kurz unterbrochen.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Abbrechen'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(isReboot ? 'Neu starten' : 'Dienst neu starten'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true || !mounted) return;
+
+    try {
+      final response = isReboot
+          ? await widget.client.post('reboot')
+          : await widget.client.post('service/$action/restart');
+      if (!mounted) return;
+      if (response.statusCode != 200) {
+        throw widget.client.responseException(response);
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            isReboot
+                ? 'Neustart wurde gestartet.'
+                : '${action == 'samba' ? 'Samba' : 'Tailscale'} wird neu gestartet.',
+          ),
+        ),
+      );
+      if (!isReboot) {
+        await Future<void>.delayed(const Duration(seconds: 2));
+        await load();
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Aktion fehlgeschlagen: $error')),
+      );
+    }
+  }
+
   Future<void> dockerAction(Map container, String action) async {
     final name =
         container['Names']?.toString() ?? container['ID']?.toString() ?? '';
@@ -1225,6 +1283,63 @@ class _SystemToolsTabState extends State<_SystemToolsTab> {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.tune_rounded),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Server-Steuerzentrale',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Dienste sicher verwalten. Neustarts werden vorab bestätigt.',
+                    style: TextStyle(color: Colors.white60),
+                  ),
+                  const SizedBox(height: 14),
+                  _ServiceControlRow(
+                    title: 'Samba / NAS',
+                    subtitle: 'Dateifreigabe',
+                    active: systemInfo['samba'] == true,
+                    icon: Icons.folder_shared_rounded,
+                    onRestart: () => runSystemAction('samba'),
+                  ),
+                  const Divider(height: 20),
+                  _ServiceControlRow(
+                    title: 'Tailscale',
+                    subtitle: 'Fernzugriff',
+                    active: (systemInfo['tailscale'] is Map) &&
+                        (systemInfo['tailscale']['online'] == true),
+                    icon: Icons.vpn_lock_rounded,
+                    onRestart: () => runSystemAction('tailscale'),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => runSystemAction('reboot'),
+                      icon: const Icon(Icons.restart_alt_rounded),
+                      label: const Text('Raspberry Pi neu starten'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.orangeAccent,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           _MetricCard(
             icon: Icons.storage_rounded,
             title: 'Speicheranalyse',
@@ -1320,6 +1435,66 @@ class _SystemToolsTabState extends State<_SystemToolsTab> {
               ),
         ],
       ),
+    );
+  }
+}
+
+class _ServiceControlRow extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final bool active;
+  final IconData icon;
+  final VoidCallback onRestart;
+
+  const _ServiceControlRow({
+    required this.title,
+    required this.subtitle,
+    required this.active,
+    required this.icon,
+    required this.onRestart,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final statusColor = active ? Colors.greenAccent : Colors.orangeAccent;
+    return Row(
+      children: [
+        CircleAvatar(
+          backgroundColor: statusColor.withValues(alpha: 0.12),
+          foregroundColor: statusColor,
+          child: Icon(icon),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+              Text(subtitle, style: const TextStyle(color: Colors.white60, fontSize: 12)),
+              const SizedBox(height: 3),
+              Row(
+                children: [
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(color: statusColor, shape: BoxShape.circle),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    active ? 'Verbunden / aktiv' : 'Offline / nicht aktiv',
+                    style: TextStyle(color: statusColor, fontSize: 12, fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        IconButton(
+          tooltip: 'Dienst neu starten',
+          onPressed: onRestart,
+          icon: const Icon(Icons.restart_alt_rounded),
+        ),
+      ],
     );
   }
 }
