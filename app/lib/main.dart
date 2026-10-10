@@ -288,7 +288,7 @@ class _DashboardPageState extends State<DashboardPage>
   String? androidUpdatePath;
   List<String> dashboardShortcuts = ['files', 'more', 'backups', 'search'];
 
-  static const clientAppVersion = '2.3.1';
+  static const clientAppVersion = '2.3.2';
 
   Future<http.Response> _apiGet(
     String path, {
@@ -1956,6 +1956,22 @@ class _DashboardPageState extends State<DashboardPage>
                           onRestart: widget.session.can('system_control')
                               ? () {
                                   restartService('tailscale', 'Tailscale');
+                                }
+                              : null,
+                        ),
+
+                        const SizedBox(height: 12),
+
+                        ServiceControlCard(
+                          title: 'Ngrok-Tunnel',
+                          icon: Icons.public_rounded,
+                          online: data?['system']?['ngrok'] == true,
+                          description: data?['system']?['ngrok'] == true
+                              ? 'Fernzugriff-Tunnel läuft'
+                              : 'Fernzugriff-Tunnel ist gestoppt',
+                          onRestart: widget.session.can('system_control')
+                              ? () {
+                                  restartService('ngrok', 'Ngrok-Tunnel');
                                 }
                               : null,
                         ),
