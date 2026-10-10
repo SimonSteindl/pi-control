@@ -90,7 +90,7 @@ extension PiLayoutStyleDetails on PiLayoutStyle {
 PiLayoutStyle piLayoutStyleFromKey(String? value) {
   return PiLayoutStyle.values.firstWhere(
     (style) => style.storageKey == value,
-    orElse: () => PiLayoutStyle.aurora,
+    orElse: () => PiLayoutStyle.commandCenter,
   );
 }
 
@@ -121,11 +121,11 @@ ThemeData buildPiLayoutTheme(
     ),
     PiLayoutStyle.commandCenter => (
       const Color(0xFF070B12),
-      const Color(0xFF111721),
-      12.0,
+      const Color(0xFF101827),
+      20.0,
       0.0,
-      18.0,
-      12.0,
+      22.0,
+      15.0,
     ),
     PiLayoutStyle.compact => (
       const Color(0xFF0B0E13),
@@ -156,15 +156,30 @@ ThemeData buildPiLayoutTheme(
     scaffoldBackgroundColor: background,
     visualDensity: dense ? VisualDensity.compact : VisualDensity.standard,
     textTheme: base.textTheme.copyWith(
+      headlineLarge: base.textTheme.headlineLarge?.copyWith(
+        fontWeight: FontWeight.w900,
+        letterSpacing: -1.1,
+        height: 1.05,
+      ),
+      headlineMedium: base.textTheme.headlineMedium?.copyWith(
+        fontWeight: FontWeight.w900,
+        letterSpacing: -0.7,
+      ),
       headlineSmall: base.textTheme.headlineSmall?.copyWith(
         fontWeight: FontWeight.w900,
         letterSpacing: -0.5,
       ),
       titleLarge: base.textTheme.titleLarge?.copyWith(
         fontWeight: FontWeight.w800,
+        letterSpacing: -0.25,
       ),
       titleMedium: base.textTheme.titleMedium?.copyWith(
         fontWeight: FontWeight.w700,
+      ),
+      bodyMedium: base.textTheme.bodyMedium?.copyWith(height: 1.4),
+      bodySmall: base.textTheme.bodySmall?.copyWith(
+        color: scheme.onSurfaceVariant,
+        height: 1.35,
       ),
     ),
     extensions: [
@@ -186,6 +201,8 @@ ThemeData buildPiLayoutTheme(
         side: BorderSide(
           color: style == PiLayoutStyle.aurora
               ? scheme.primary.withValues(alpha: 0.12)
+              : style == PiLayoutStyle.commandCenter
+              ? scheme.primary.withValues(alpha: 0.16)
               : Colors.white.withValues(alpha: 0.07),
         ),
       ),
@@ -207,7 +224,7 @@ ThemeData buildPiLayoutTheme(
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: Colors.white.withValues(alpha: 0.045),
+      fillColor: const Color(0xFF0B1220),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(radius * .62),
         borderSide: border,
@@ -265,7 +282,26 @@ ThemeData buildPiLayoutTheme(
         borderRadius: BorderRadius.circular(radius * .55),
       ),
     ),
-    progressIndicatorTheme: ProgressIndicatorThemeData(color: scheme.primary),
+    progressIndicatorTheme: ProgressIndicatorThemeData(
+      color: scheme.primary,
+      linearTrackColor: scheme.primary.withValues(alpha: .12),
+      circularTrackColor: scheme.primary.withValues(alpha: .12),
+    ),
+    tabBarTheme: TabBarThemeData(
+      dividerColor: Colors.white.withValues(alpha: .07),
+      indicatorColor: scheme.primary,
+      labelColor: scheme.primary,
+      unselectedLabelColor: scheme.onSurfaceVariant,
+      labelStyle: const TextStyle(fontWeight: FontWeight.w800),
+      unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w600),
+    ),
+    floatingActionButtonTheme: FloatingActionButtonThemeData(
+      backgroundColor: scheme.primary,
+      foregroundColor: scheme.onPrimary,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(radius * .8),
+      ),
+    ),
     navigationRailTheme: NavigationRailThemeData(
       backgroundColor: surface,
       indicatorColor: scheme.primary.withValues(alpha: .22),
@@ -278,9 +314,7 @@ ThemeData buildPiLayoutTheme(
     appBarTheme: AppBarTheme(
       elevation: 0,
       centerTitle: false,
-      backgroundColor: style == PiLayoutStyle.aurora
-          ? const Color(0xFF0B1830)
-          : background,
+      backgroundColor: background,
       surfaceTintColor: Colors.transparent,
     ),
     navigationBarTheme: NavigationBarThemeData(
@@ -302,15 +336,19 @@ class PiPageSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = context.piDesign;
-    if (tokens.style != PiLayoutStyle.aurora) return child;
+    if (tokens.style != PiLayoutStyle.aurora &&
+        tokens.style != PiLayoutStyle.commandCenter) {
+      return child;
+    }
     final primary = Theme.of(context).colorScheme.primary;
+    final glow = tokens.style == PiLayoutStyle.commandCenter ? .085 : .13;
     return DecoratedBox(
       decoration: BoxDecoration(
         gradient: RadialGradient(
-          center: const Alignment(.8, -1.05),
-          radius: 1.3,
+          center: const Alignment(.82, -1.05),
+          radius: 1.35,
           colors: [
-            primary.withValues(alpha: .13),
+            primary.withValues(alpha: glow),
             Theme.of(context).scaffoldBackgroundColor,
           ],
         ),
@@ -377,7 +415,7 @@ class PiLayoutFrame extends StatelessWidget {
                 selectedIndex: selectedIndex,
                 onDestinationSelected: onSelected,
                 groupAlignment: -0.78,
-                backgroundColor: const Color(0xFF0D131D),
+                backgroundColor: const Color(0xFF0A111D),
                 indicatorColor: Theme.of(context).colorScheme.primary
                     .withValues(alpha: 0.24),
                 leading: Padding(
@@ -507,7 +545,7 @@ class _PiTopNavigation extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: const Color(0xFF11161E),
+      color: const Color(0xFF0C1421),
       child: SizedBox(
         height: compact ? 52 : 64,
         child: ListView.separated(
