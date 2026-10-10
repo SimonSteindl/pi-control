@@ -50,8 +50,8 @@ BACKUP_DIRECTORY = Path(USB_PATH) / "Backups" / "Pi-Control"
 BACKUP_SCRIPT = BASE_DIR / "backup.sh"
 MAINTENANCE_FLAG = BASE_DIR / "maintenance.enabled"
 MAINTENANCE_PAGE = BASE_DIR / "maintenance.html"
-SERVER_VERSION = "2.3.2"
-ANDROID_APP_VERSION = "2.3.1"
+SERVER_VERSION = "2.3.3"
+ANDROID_APP_VERSION = "2.3.2"
 
 HISTORY_INTERVAL_SECONDS = 60
 HISTORY_MAX_POINTS = 24 * 60
@@ -1281,6 +1281,7 @@ def collect_system_status():
             "ip": get_lan_ip(),
             "samba": service_running("smbd"),
             "tailscale": get_tailscale(),
+            "ngrok": service_running("pi-control-ngrok"),
             "kernel": platform.release(),
             "model": get_model(),
             "os": get_os_name(),
@@ -1312,6 +1313,18 @@ def collect_info():
         "usb_path": USB_PATH,
         "samba": status["samba"],
         "tailscale": status["tailscale"],
+        "system": {
+            "model": status["model"],
+            "os": status["os"],
+            "kernel": status["kernel"],
+            "load_average": get_load_average(),
+            "notifications": (
+                f"ntfy.sh/{NTFY_TOPIC}"
+                if NTFY_TOPIC
+                else "deaktiviert"
+            ),
+            "ngrok": status["ngrok"],
+        },
         "uptime": get_uptime(),
         "kernel": status["kernel"],
         "benchmark": get_benchmark_summary(),
@@ -4617,6 +4630,7 @@ def api_restart_service(service):
     service_map = {
         "samba": "smbd",
         "tailscale": "tailscaled",
+        "ngrok": "pi-control-ngrok",
     }
 
     systemd_service = service_map.get(service)
