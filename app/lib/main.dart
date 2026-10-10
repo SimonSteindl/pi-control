@@ -375,6 +375,28 @@ class _DashboardPageState extends State<DashboardPage>
     }
   }
 
+  bool _isNewerVersion(String candidate, String current) {
+    final candidateParts = candidate
+        .split('.')
+        .map((part) => int.tryParse(part) ?? 0)
+        .toList();
+    final currentParts = current
+        .split('.')
+        .map((part) => int.tryParse(part) ?? 0)
+        .toList();
+    final length = candidateParts.length > currentParts.length
+        ? candidateParts.length
+        : currentParts.length;
+    for (var index = 0; index < length; index++) {
+      final candidatePart =
+          index < candidateParts.length ? candidateParts[index] : 0;
+      final currentPart =
+          index < currentParts.length ? currentParts[index] : 0;
+      if (candidatePart != currentPart) return candidatePart > currentPart;
+    }
+    return false;
+  }
+
   Future<void> checkAppVersion() async {
     try {
       final response = await _apiGet(
@@ -385,7 +407,11 @@ class _DashboardPageState extends State<DashboardPage>
       final decoded = jsonDecode(response.body);
       if (decoded is! Map) return;
       final latest = decoded['latest_version']?.toString();
-      if (latest == null || latest == clientAppVersion || !mounted) return;
+      if (latest == null ||
+          !_isNewerVersion(latest, clientAppVersion) ||
+          !mounted) {
+        return;
+      }
       setState(() {
         availableAppVersion = latest;
         androidUpdatePath = decoded['android_download']?.toString();
