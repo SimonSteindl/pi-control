@@ -41,7 +41,7 @@ class PiControlApp extends StatefulWidget {
 }
 
 class _PiControlAppState extends State<PiControlApp> {
-  Color accentColor = const Color(0xFF39E6C2);
+  Color accentColor = const Color(0xFFFF7900);
   PiLayoutStyle layoutStyle = PiLayoutStyle.commandCenter;
   final PiApiClient client = PiApiClient();
   AuthSession? session;
