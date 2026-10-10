@@ -2322,12 +2322,18 @@ class _QuickActionTile extends StatelessWidget {
         onTap: onTap,
         child: Container(
           padding: const EdgeInsets.all(16),
-          decoration: style == PiLayoutStyle.aurora
+          decoration:
+              style == PiLayoutStyle.aurora ||
+                  style == PiLayoutStyle.commandCenter
               ? BoxDecoration(
                   gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
                     colors: [
-                      colors.primary.withValues(alpha: .22),
-                      Colors.transparent,
+                      colors.primary.withValues(
+                        alpha: style == PiLayoutStyle.commandCenter ? .10 : .22,
+                      ),
+                      const Color(0xFF101827).withValues(alpha: .15),
                     ],
                   ),
                 )
@@ -2424,8 +2430,10 @@ class DashboardHeroCard extends StatelessWidget {
           const Color(0xFF19223A),
         ],
       ),
-      PiLayoutStyle.commandCenter => LinearGradient(
-        colors: [const Color(0xFF111A28), accentColor.withValues(alpha: .35)],
+      PiLayoutStyle.commandCenter => const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [Color(0xFF101827), Color(0xFF0D2029), Color(0xFF111827)],
       ),
       PiLayoutStyle.compact => LinearGradient(
         colors: [const Color(0xFF171D27), accentColor.withValues(alpha: .20)],
@@ -2441,14 +2449,18 @@ class DashboardHeroCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(context.piDesign.radius + 4),
         border: Border.all(
           color: style == PiLayoutStyle.commandCenter
-              ? accentColor.withValues(alpha: .55)
+              ? accentColor.withValues(alpha: .30)
               : Colors.white.withValues(alpha: .08),
         ),
-        boxShadow: style == PiLayoutStyle.aurora
+        boxShadow:
+            style == PiLayoutStyle.aurora ||
+                style == PiLayoutStyle.commandCenter
             ? [
                 BoxShadow(
-                  color: accentColor.withValues(alpha: 0.20),
-                  blurRadius: 30,
+                  color: accentColor.withValues(
+                    alpha: style == PiLayoutStyle.commandCenter ? .10 : .20,
+                  ),
+                  blurRadius: style == PiLayoutStyle.commandCenter ? 34 : 30,
                   offset: const Offset(0, 14),
                 ),
               ]
@@ -2456,6 +2468,22 @@ class DashboardHeroCard extends StatelessWidget {
       ),
       child: Stack(
         children: [
+          if (style == PiLayoutStyle.commandCenter)
+            Positioned(
+              right: -72,
+              top: -86,
+              child: Container(
+                width: 250,
+                height: 250,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: accentColor.withValues(alpha: .10),
+                    width: 1.5,
+                  ),
+                ),
+              ),
+            ),
           if (style == PiLayoutStyle.aurora)
             Positioned(
               right: -54,
