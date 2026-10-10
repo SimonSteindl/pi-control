@@ -12,6 +12,17 @@ class _ChangelogDialog extends StatelessWidget {
 
   static const entries = [
     _ChangelogEntry(
+      version: 'App 2.4.0',
+      date: '10. Oktober 2026',
+      title: 'Dark Server Cockpit',
+      highlights: [
+        'Neues Command-Center-Design mit tiefdunklem Hintergrund und leuchtendem Mint-Akzent.',
+        'Überarbeitete Karten, Navigation, Eingabefelder, Dialoge und Schaltflächen in der gesamten App.',
+        'Mehr Kontrast, ruhigere Abstände und einheitliche Rundungen auf Handy und Desktop.',
+        'Das Dashboard bekommt dezente Lichtakzente statt greller Flächen.',
+      ],
+    ),
+    _ChangelogEntry(
       version: 'Web 2.4.0',
       date: '4. September 2026',
       title: 'Komplettes Design Studio',
