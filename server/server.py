@@ -1313,18 +1313,6 @@ def collect_info():
         "usb_path": USB_PATH,
         "samba": status["samba"],
         "tailscale": status["tailscale"],
-        "system": {
-            "model": status["model"],
-            "os": status["os"],
-            "kernel": status["kernel"],
-            "load_average": get_load_average(),
-            "notifications": (
-                f"ntfy.sh/{NTFY_TOPIC}"
-                if NTFY_TOPIC
-                else "deaktiviert"
-            ),
-            "ngrok": status["ngrok"],
-        },
         "uptime": get_uptime(),
         "kernel": status["kernel"],
         "benchmark": get_benchmark_summary(),
@@ -1338,6 +1326,7 @@ def collect_info():
                 if NTFY_TOPIC
                 else "deaktiviert"
             ),
+            "ngrok": status["ngrok"],
         },
     }
 
