@@ -41,8 +41,8 @@ class PiControlApp extends StatefulWidget {
 }
 
 class _PiControlAppState extends State<PiControlApp> {
-  Color accentColor = Colors.blue;
-  PiLayoutStyle layoutStyle = PiLayoutStyle.aurora;
+  Color accentColor = const Color(0xFF39E6C2);
+  PiLayoutStyle layoutStyle = PiLayoutStyle.commandCenter;
   final PiApiClient client = PiApiClient();
   AuthSession? session;
   bool restoringSession = true;
@@ -288,7 +288,7 @@ class _DashboardPageState extends State<DashboardPage>
   String? androidUpdatePath;
   List<String> dashboardShortcuts = ['files', 'more', 'backups', 'search'];
 
-  static const clientAppVersion = '2.3.2';
+  static const clientAppVersion = '2.4.0';
 
   Future<http.Response> _apiGet(
     String path, {
@@ -1375,13 +1375,22 @@ class _DashboardPageState extends State<DashboardPage>
             : layoutStyle == PiLayoutStyle.compact
             ? 58
             : 70,
-        flexibleSpace: layoutStyle == PiLayoutStyle.aurora
+        flexibleSpace:
+            layoutStyle == PiLayoutStyle.aurora ||
+                layoutStyle == PiLayoutStyle.commandCenter
             ? DecoratedBox(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
                     colors: [
-                      widget.accentColor.withValues(alpha: 0.20),
-                      const Color(0xFF0B1830),
+                      widget.accentColor.withValues(
+                        alpha: layoutStyle == PiLayoutStyle.commandCenter
+                            ? 0.11
+                            : 0.20,
+                      ),
+                      const Color(0xFF0B1220),
+                      const Color(0xFF080D16),
                     ],
                   ),
                 ),
