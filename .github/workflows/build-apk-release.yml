@@ -1,6 +1,12 @@
 name: Build Android APK on Release
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/build-apk-release.yml'
+  workflow_dispatch:
   release:
     types: [published]
 
@@ -31,7 +37,15 @@ jobs:
       - name: Build APK
         run: flutter build apk --release
 
+      - name: Save APK as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pi-Control-2.4.0-APK
+          path: app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
       - name: Upload APK to GitHub Release
+        if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
