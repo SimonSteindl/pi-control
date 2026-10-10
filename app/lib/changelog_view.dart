@@ -12,6 +12,17 @@ class _ChangelogDialog extends StatelessWidget {
 
   static const entries = [
     _ChangelogEntry(
+      version: 'Web 2.4.1',
+      date: '10. Oktober 2026',
+      title: 'Raspberry-Pi-Steuerzentrale',
+      highlights: [
+        'Samba/NAS und Tailscale werden im Admin-Systembereich mit Live-Status angezeigt.',
+        'Dienste lassen sich nach einer Sicherheitsabfrage direkt neu starten.',
+        'Der Raspberry Pi kann mit einer zusätzlichen Bestätigung aus der App neu gestartet werden.',
+        'Dashboard-Werte, Warnmeldungen und das abgesicherte Terminal ergänzen die Systemverwaltung.',
+      ],
+    ),
+    _ChangelogEntry(
       version: 'Web 2.4.0',
       date: '4. September 2026',
       title: 'Komplettes Design Studio',
