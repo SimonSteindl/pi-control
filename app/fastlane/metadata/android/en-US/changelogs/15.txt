@@ -1,0 +1,1 @@
+Initial F-Droid metadata for Pi Control 2.4.0.
