@@ -4630,6 +4630,30 @@ def api_restart_service(service):
             "error": "Unbekannter Dienst",
         }), 404
 
+    if service == "ngrok":
+        def delayed_ngrok_restart():
+            time.sleep(2)
+            try:
+                subprocess.run(
+                    ["systemctl", "restart", systemd_service],
+                    timeout=30,
+                    check=True,
+                )
+            except Exception:
+                app.logger.exception("ngrok restart failed")
+
+        threading.Thread(
+            target=delayed_ngrok_restart,
+            daemon=True,
+        ).start()
+
+        return jsonify({
+            "ok": True,
+            "service": service,
+            "active": True,
+            "message": "ngrok wird in Kürze neu gestartet",
+        })
+
     code, _, stderr = run_command(
         ["systemctl", "restart", systemd_service],
         timeout=15,

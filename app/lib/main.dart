@@ -936,7 +936,18 @@ class _DashboardPageState extends State<DashboardPage>
         body: '{}',
       );
 
-      final decoded = response.body.isEmpty ? null : jsonDecode(response.body);
+      dynamic decoded;
+      try {
+        decoded = response.body.isEmpty ? null : jsonDecode(response.body);
+      } on FormatException {
+        if (path == 'service/ngrok/restart') {
+          throw Exception(
+            'ngrok startet gerade oder ist kurz nicht erreichbar. '
+            'Bitte 10 Sekunden warten und den Status erneut prüfen.',
+          );
+        }
+        throw Exception('Ungültige Serverantwort (HTTP ${response.statusCode}).');
+      }
 
       if (response.statusCode != 200) {
         final message = decoded is Map ? decoded['error']?.toString() : null;
@@ -948,7 +959,10 @@ class _DashboardPageState extends State<DashboardPage>
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(successText)));
 
-      Future.delayed(const Duration(seconds: 2), () {
+      final refreshDelay = path == 'service/ngrok/restart'
+          ? const Duration(seconds: 8)
+          : const Duration(seconds: 2);
+      Future.delayed(refreshDelay, () {
         if (mounted) {
           loadData();
         }

@@ -12,6 +12,16 @@ class _ChangelogDialog extends StatelessWidget {
 
   static const entries = [
     _ChangelogEntry(
+      version: 'App 2.4.1',
+      date: '12. Oktober 2026',
+      title: 'Stabilerer ngrok-Neustart',
+      highlights: [
+        'Der ngrok-Tunnel wird nach der Bestätigung verzögert im Hintergrund neu gestartet.',
+        'Die App wartet nach dem Neustart länger, bevor sie den Serverstatus erneut lädt.',
+        'Ungültige Gateway-Antworten werden verständlich gemeldet statt als JSON-Formatfehler angezeigt.',
+      ],
+    ),
+    _ChangelogEntry(
       version: 'App 2.4.0',
       date: '10. Oktober 2026',
       title: 'Dark Server Cockpit',
