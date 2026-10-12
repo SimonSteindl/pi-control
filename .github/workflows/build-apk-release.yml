@@ -42,20 +42,6 @@ jobs:
           path: app/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
 
-      - name: Publish versioned release from an explicit release commit
-        if: github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          VERSION="$(grep '^version:' app/pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)"
-          test -n "$VERSION"
-          gh release create "$VERSION" \
-            "app/build/app/outputs/flutter-apk/app-release.apk" \
-            --title "Pi Control v$VERSION" \
-            --notes "Pi Control v$VERSION: stabilerer ngrok-Neustart und robustere Fehlerbehandlung." \
-            --target "$GITHUB_SHA" \
-            --repo "${{ github.repository }}"
-
       - name: Upload APK to GitHub Release
         if: github.event_name == 'release'
         env:
