@@ -1,0 +1,49 @@
+name: F-Droid source build check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'fdroid/metadata/**'
+      - '.github/workflows/fdroid-source-build.yml'
+      - 'LICENSE'
+
+permissions:
+  contents: read
+
+jobs:
+  source-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up pinned Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.0'
+          cache: true
+
+      - name: Check metadata version matches app
+        shell: bash
+        run: |
+          grep -q "^version: 2.4.0+15$" app/pubspec.yaml
+          grep -q "^CurrentVersion: '2.4.0'$" fdroid/metadata/io.github.simonsteindl.picontrol.yml
+          grep -q "^CurrentVersionCode: 15$" fdroid/metadata/io.github.simonsteindl.picontrol.yml
+
+      - name: Resolve locked dependencies
+        working-directory: app
+        run: flutter pub get --enforce-lockfile
+
+      - name: Build release APK from source
+        working-directory: app
+        run: flutter build apk --release
+
+      - name: Upload source-built APK for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pi-Control-F-Droid-source-build
+          path: app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
