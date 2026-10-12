@@ -13,8 +13,8 @@ IssueTracker: https://github.com/SimonSteindl/pi-control/issues
 AutoUpdateMode: Version %v
 UpdateCheckMode: Tags
 UpdateCheckData: app/pubspec.yaml|version:\s.+\+(\d+)|.|version:\s(.+)\+
-CurrentVersion: '2.4.0'
-CurrentVersionCode: 15
+CurrentVersion: '2.4.1'
+CurrentVersionCode: 16
 
 RepoType: git
 Repo: https://github.com/SimonSteindl/pi-control.git
