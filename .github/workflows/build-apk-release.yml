@@ -17,10 +17,6 @@ jobs:
   build-apk:
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        working-directory: app
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,37 +24,27 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.47.0'
           cache: true
 
-      - name: Install dependencies
-        run: flutter pub get
+      - name: Install locked dependencies
+        working-directory: app
+        run: flutter pub get --enforce-lockfile
 
-      - name: Build APK
+      - name: Build release APK
+        working-directory: app
         run: flutter build apk --release
-
-      - name: Configure Web platform
-        run: flutter create . --platforms web
-
-      - name: Build Web
-        run: flutter build web --release
 
       - name: Save APK as workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Pi-Control-2.4.0-APK
+          name: Pi-Control-APK
           path: app/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
 
-      - name: Save Web build as workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Pi-Control-2.4.0-Web
-          path: app/build/web/**
-          if-no-files-found: error
-
       - name: Upload APK to GitHub Release
+        if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || '2.4.0' }}
-        run: gh release upload "$RELEASE_TAG" "build/app/outputs/flutter-apk/app-release.apk" --clobber --repo "${{ github.repository }}"
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" "app/build/app/outputs/flutter-apk/app-release.apk" --clobber --repo "${{ github.repository }}"
