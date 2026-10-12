@@ -1,0 +1,38 @@
+# Draft only: this file is NOT yet submitted to the official F-Droid repository.
+# Intended destination in fdroiddata: metadata/io.github.simonsteindl.picontrol.yml
+# Verify the build with fdroidserver before opening the upstream merge request.
+
+Categories:
+  - System
+License: Apache-2.0
+AuthorName: Simon Steindl
+WebSite: https://github.com/SimonSteindl/pi-control
+SourceCode: https://github.com/SimonSteindl/pi-control
+IssueTracker: https://github.com/SimonSteindl/pi-control/issues
+
+AutoUpdateMode: Version %v
+UpdateCheckMode: Tags
+UpdateCheckData: app/pubspec.yaml|version:\s.+\+(\d+)|.|version:\s(.+)\+
+CurrentVersion: '2.4.0'
+CurrentVersionCode: 15
+
+RepoType: git
+Repo: https://github.com/SimonSteindl/pi-control.git
+
+Builds:
+  - versionName: '2.4.0'
+    versionCode: 15
+    commit: 2.4.0
+    output: app/build/app/outputs/flutter-apk/app-release.apk
+    srclibs:
+      - flutter@3.47.0
+    rm:
+      - app/ios
+      - app/linux
+      - app/macos
+      - app/web
+      - app/windows
+    build:
+      - $$flutter$$/bin/flutter config --no-analytics
+      - cd app && $$flutter$$/bin/flutter pub get
+      - cd app && $$flutter$$/bin/flutter build apk --release
