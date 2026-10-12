@@ -1,0 +1,12 @@
+Pi Control is a self-hosted Android app for monitoring and managing a Raspberry Pi using your own Pi-Control server.
+
+Features include:
+* View Raspberry Pi system information and status
+* Monitor CPU temperature, memory usage, storage and uptime
+* Access files through the server's file manager
+* Manage your own Pi-Control server connection
+* Use a private, self-hosted setup instead of a third-party cloud service
+
+Pi Control requires a separately installed and configured Pi-Control server running on a Raspberry Pi. The app connects to the server address you configure.
+
+Source code: https://github.com/SimonSteindl/pi-control
