@@ -1,0 +1,114 @@
+name: Cloudflare dashboard
+
+on:
+  pull_request:
+    paths:
+      - "app/**"
+      - "server/dashboard-worker/**"
+      - ".github/workflows/cloudflare-dashboard.yml"
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "server/dashboard-worker/**"
+      - ".github/workflows/cloudflare-dashboard.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-dashboard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Flutter web dashboard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+          cache-key: flutter-dashboard-${{ runner.os }}-${{ hashFiles('app/pubspec.lock', 'app/pubspec.yaml') }}
+
+      - name: Generate web platform files in CI
+        working-directory: app
+        run: flutter create . --platforms web
+
+      - name: Resolve Flutter dependencies
+        working-directory: app
+        run: flutter pub get
+
+      - name: Build release web app
+        working-directory: app
+        run: flutter build web --release --base-href /
+
+      - name: Prepare Cloudflare static assets
+        run: |
+          mkdir -p server/dashboard-worker/assets
+          cp -a app/build/web/. server/dashboard-worker/assets/
+
+      - name: Validate Worker deployment configuration
+        working-directory: server/dashboard-worker
+        run: npx --yes wrangler@4 deploy --dry-run
+
+      - name: Upload dashboard build for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-control-dashboard-web
+          path: server/dashboard-worker/assets/
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    name: Deploy dashboard to Cloudflare (manual only)
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+          cache-key: flutter-dashboard-${{ runner.os }}-${{ hashFiles('app/pubspec.lock', 'app/pubspec.yaml') }}
+
+      - name: Generate web platform files in CI
+        working-directory: app
+        run: flutter create . --platforms web
+
+      - name: Resolve Flutter dependencies
+        working-directory: app
+        run: flutter pub get
+
+      - name: Build release web app
+        working-directory: app
+        run: flutter build web --release --base-href /
+
+      - name: Prepare Cloudflare static assets
+        run: |
+          mkdir -p server/dashboard-worker/assets
+          cp -a app/build/web/. server/dashboard-worker/assets/
+
+      - name: Verify Cloudflare deployment secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing GitHub secret CLOUDFLARE_API_TOKEN"; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "Missing GitHub secret CLOUDFLARE_ACCOUNT_ID"; exit 1; }
+
+      - name: Deploy separate dashboard Worker
+        working-directory: server/dashboard-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4 deploy
