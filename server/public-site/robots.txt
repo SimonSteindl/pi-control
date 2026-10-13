@@ -1,2 +1,4 @@
 User-agent: *
 Allow: /
+
+Sitemap: https://pi-control-public.steindlsimon12.workers.dev/sitemap.xml
