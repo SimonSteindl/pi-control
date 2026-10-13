@@ -65,6 +65,40 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  publish_assets:
+    name: Publish static dashboard assets
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download validated dashboard build
+        uses: actions/download-artifact@v4
+        with:
+          name: pi-control-dashboard-web
+          path: /tmp/pi-control-dashboard-web
+
+      - name: Publish to dedicated asset branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --orphan dashboard-web-assets
+          git rm -rf . || true
+          git clean -fdx
+          cp -a /tmp/pi-control-dashboard-web/. .
+          touch .nojekyll
+          git add -A
+          git commit -m "Publish Pi-Control dashboard assets from ${GITHUB_SHA}"
+          git push --force origin HEAD:dashboard-web-assets
+
   deploy:
     name: Deploy dashboard to Cloudflare (manual only)
     if: github.event_name == 'workflow_dispatch'
