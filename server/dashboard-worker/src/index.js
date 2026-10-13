@@ -30,6 +30,11 @@ export default {
 
       const headers = new Headers(request.headers);
       headers.delete("host");
+      // Trust Cloudflare's client IP, not a client-supplied forwarding header.
+      const clientIp = request.headers.get("CF-Connecting-IP");
+      if (clientIp) headers.set("X-Forwarded-For", clientIp);
+      // Tell Flask the public request used HTTPS so its session cookie is Secure.
+      headers.set("X-Forwarded-Proto", "https");
 
       const init = {
         method: request.method,
