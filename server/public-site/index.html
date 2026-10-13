@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Pi-Control is a Raspberry Pi monitoring and management project with an app and a web interface. Explore its features, source code and releases.">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#101827">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Pi-Control — Raspberry Pi Monitoring">
+  <meta property="og:description" content="A project for monitoring and managing a Raspberry Pi with an app and web interface.">
+  <title>Pi-Control — Raspberry Pi Monitoring &amp; Management</title>
+  <style>
+    :root { color-scheme: dark; --bg: #101827; --panel: #1b293c; --text: #edf2f7; --muted: #c5d0df; --accent: #73e0b2; --border: #34445a; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
+    main { width: min(900px, 100%); margin: auto; padding: 64px 24px 40px; }
+    .tag { color: var(--accent); font-size: .82rem; font-weight: 800; letter-spacing: .16em; }
+    h1 { font-size: clamp(2.6rem, 8vw, 4.8rem); line-height: 1.05; letter-spacing: -.04em; margin: 16px 0; }
+    h2 { margin-top: 0; font-size: 1.45rem; }
+    .intro { max-width: 680px; font-size: 1.18rem; color: var(--muted); }
+    .panel { margin-top: 32px; padding: 26px; border: 1px solid var(--border); border-radius: 18px; background: var(--panel); }
+    ul { padding-left: 1.3rem; color: var(--muted); }
+    li { padding: 3px 0; }
+    .links { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 22px; }
+    .links a { display: inline-block; padding: 11px 15px; border: 1px solid var(--border); border-radius: 10px; color: var(--accent); text-decoration: none; font-weight: 700; }
+    .links a:hover, a:focus-visible { border-color: var(--accent); text-decoration: underline; }
+    footer { margin-top: 54px; border-top: 1px solid var(--border); padding-top: 20px; color: #a7b4c5; font-size: .9rem; }
+    footer a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="tag">RASPBERRY PI PROJECT</div>
+    <h1>Pi-Control</h1>
+    <p class="intro">A Raspberry Pi monitoring and management project, bringing system information and server controls together through a dedicated app and web interface.</p>
+
+    <section class="panel" aria-labelledby="features">
+      <h2 id="features">Project features</h2>
+      <ul>
+        <li>System information, including CPU temperature and uptime</li>
+        <li>Memory and storage monitoring</li>
+        <li>Network information and status checks</li>
+        <li>CPU benchmarking and history</li>
+        <li>File management through the project interface</li>
+        <li>A mobile app connected to a Python/Flask server</li>
+      </ul>
+    </section>
+
+    <section class="panel" aria-labelledby="explore">
+      <h2 id="explore">Explore the project</h2>
+      <p>Pi-Control is actively being developed. Visit the repository for the current source code, project documentation and available downloads.</p>
+      <nav class="links" aria-label="Project links">
+        <a href="https://github.com/SimonSteindl/pi-control">Source code on GitHub</a>
+        <a href="https://github.com/SimonSteindl/pi-control/releases">Releases &amp; downloads</a>
+      </nav>
+    </section>
+
+    <footer>
+      <p>Pi-Control · Raspberry Pi monitoring and management</p>
+      <p><a href="https://github.com/SimonSteindl/pi-control">Project repository</a></p>
+    </footer>
+  </main>
+</body>
+</html>
