@@ -1,0 +1,8 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pi-control-public",
+  "compatibility_date": "2026-10-13",
+  "assets": {
+    "directory": "."
+  }
+}
