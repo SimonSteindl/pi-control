@@ -46,12 +46,44 @@ jobs:
 
       - name: Build release web app
         working-directory: app
-        run: flutter build web --release --base-href /
+        run: flutter build web --release --base-href / --pwa-strategy=none
 
       - name: Prepare Cloudflare static assets
         run: |
           mkdir -p server/dashboard-worker/assets
           cp -a app/build/web/. server/dashboard-worker/assets/
+          python3 - <<'PY'
+          from pathlib import Path
+
+          bootstrap = Path("server/dashboard-worker/assets/flutter_bootstrap.js")
+          source = bootstrap.read_text(encoding="utf-8")
+          marker = "_flutter.loader.load({"
+          if marker not in source:
+              raise SystemExit("Flutter bootstrap entrypoint was not found")
+          source = source.replace(
+              marker,
+              marker + '\\n  config: { useLocalCanvasKit: true },',
+              1,
+          )
+          bootstrap.write_text(source, encoding="utf-8")
+          print("Configured Flutter Web to use its locally hosted CanvasKit.")
+          PY
+          python3 - <<'PY'
+          from pathlib import Path
+
+          bootstrap = Path("server/dashboard-worker/assets/flutter_bootstrap.js")
+          source = bootstrap.read_text(encoding="utf-8")
+          marker = "_flutter.loader.load({"
+          if marker not in source:
+              raise SystemExit("Flutter bootstrap entrypoint was not found")
+          source = source.replace(
+              marker,
+              marker + '\\n  config: { useLocalCanvasKit: true },',
+              1,
+          )
+          bootstrap.write_text(source, encoding="utf-8")
+          print("Configured Flutter Web to use its locally hosted CanvasKit.")
+          PY
 
       - name: Validate Worker deployment configuration
         working-directory: server/dashboard-worker
@@ -125,7 +157,7 @@ jobs:
 
       - name: Build release web app
         working-directory: app
-        run: flutter build web --release --base-href /
+        run: flutter build web --release --base-href / --pwa-strategy=none
 
       - name: Prepare Cloudflare static assets
         run: |
