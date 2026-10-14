@@ -12,17 +12,17 @@ IssueTracker: https://github.com/SimonSteindl/pi-control/issues
 
 AutoUpdateMode: Version %v
 UpdateCheckMode: Tags
-UpdateCheckData: app/pubspec.yaml|version:\s.+\+(\d+)|.|version:\s(.+)\+
-CurrentVersion: '2.4.1'
-CurrentVersionCode: 16
+UpdateCheckData: app/pubspec.yaml|version:\\s.+\\+(\\d+)|.|version:\\s(.+)\\+
+CurrentVersion: '2.4.2'
+CurrentVersionCode: 17
 
 RepoType: git
 Repo: https://github.com/SimonSteindl/pi-control.git
 
 Builds:
-  - versionName: '2.4.0'
-    versionCode: 15
-    commit: 2.4.0
+  - versionName: '2.4.2'
+    versionCode: 17
+    commit: 0f74412494f60e124c5a6642b05d99a3ee38e86f
     output: app/build/app/outputs/flutter-apk/app-release.apk
     srclibs:
       - flutter@3.47.0
