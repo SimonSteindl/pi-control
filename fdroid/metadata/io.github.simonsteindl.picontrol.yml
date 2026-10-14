@@ -12,7 +12,7 @@ IssueTracker: https://github.com/SimonSteindl/pi-control/issues
 
 AutoUpdateMode: Version %v
 UpdateCheckMode: Tags
-UpdateCheckData: app/pubspec.yaml|version:\\s.+\\+(\\d+)|.|version:\\s(.+)\\+
+UpdateCheckData: app/pubspec.yaml|version:\s.+\+(\d+)|.|version:\s(.+)\+
 CurrentVersion: '2.4.2'
 CurrentVersionCode: 17
 
