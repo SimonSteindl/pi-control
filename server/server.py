@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 import urllib.parse
 import zipfile
@@ -1769,6 +1770,88 @@ def process_scheduled_tasks():
                     subprocess.run(["systemctl", "restart", service], timeout=30, check=True)
             except Exception as exc:
                 send_ntfy("Pi Control: Geplante Aufgabe fehlgeschlagen", f"{row['name']}: {exc}", priority="high", tags="warning")
+
+
+@app.post("/api/ai/chat")
+@authentication_required()
+def api_ai_chat():
+    """Proxy a bounded chat request to the administrator-configured Ollama host."""
+    ollama_base = os.environ.get("PI_CONTROL_OLLAMA_URL", "").strip().rstrip("/")
+    if not ollama_base:
+        return jsonify({
+            "ok": False,
+            "error": "KI ist noch nicht verbunden. Bitte zuerst PI_CONTROL_OLLAMA_URL konfigurieren.",
+            "code": "ai_not_configured",
+        }), 503
+
+    payload = request.get_json(silent=True) or {}
+    model = str(payload.get("model") or "qwen3:1.7b").strip()
+    if model not in {"qwen3:1.7b", "qwen3:4b"}:
+        return jsonify({"ok": False, "error": "Dieses KI-Modell ist nicht freigegeben."}), 400
+
+    raw_messages = payload.get("messages")
+    if not isinstance(raw_messages, list) or not raw_messages:
+        return jsonify({"ok": False, "error": "Bitte zuerst eine Frage eingeben."}), 400
+
+    messages = [{
+        "role": "system",
+        "content": "Du bist Pi-Control AI, ein hilfreicher Assistent. Antworte standardmäßig auf Deutsch, klar und verständlich. Du hast keinen direkten Zugriff auf den Raspberry Pi oder dessen Live-Daten, außer der Nutzer gibt sie dir im Chat.",
+    }]
+    for item in raw_messages[-12:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "")
+        content = str(item.get("content") or "").strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        if len(content) > 4000:
+            content = content[:4000]
+        messages.append({"role": role, "content": content})
+
+    if len(messages) < 2 or messages[-1]["role"] != "user":
+        return jsonify({"ok": False, "error": "Die letzte Nachricht muss eine Frage sein."}), 400
+
+    body = json.dumps({
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "options": {"num_ctx": 4096, "num_predict": 512},
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"{ollama_base}/api/chat",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=150) as response:
+            result = json.loads(response.read(2 * 1024 * 1024).decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return jsonify({
+            "ok": False,
+            "error": f"Ollama hat die Anfrage abgelehnt (HTTP {exc.code}).",
+            "code": "ollama_http_error",
+        }), 502
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        app.logger.warning("Pi-Control AI konnte Ollama nicht erreichen: %s", exc)
+        return jsonify({
+            "ok": False,
+            "error": "Der KI-PC ist nicht erreichbar oder die Antwort hat zu lange gedauert.",
+            "code": "ollama_unreachable",
+        }), 502
+
+    message = result.get("message") if isinstance(result, dict) else None
+    answer = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(answer, str) or not answer.strip():
+        return jsonify({"ok": False, "error": "Ollama hat keine Antwort geliefert."}), 502
+
+    write_audit("ai.chat", model, {"message_count": len(messages) - 1})
+    return jsonify({
+        "ok": True,
+        "model": model,
+        "message": {"role": "assistant", "content": answer},
+    })
 
 
 @app.get("/api/auth/status")

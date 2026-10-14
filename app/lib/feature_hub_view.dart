@@ -20,6 +20,7 @@ class FeatureHubView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tabs = <Tab>[
+      const Tab(icon: Icon(Icons.auto_awesome_rounded), text: 'KI-Chat'),
       const Tab(icon: Icon(Icons.photo_library_outlined), text: 'Medien'),
       const Tab(icon: Icon(Icons.checklist_rounded), text: 'Organizer'),
       const Tab(icon: Icon(Icons.devices_rounded), text: 'Geräte'),
@@ -38,6 +39,7 @@ class FeatureHubView extends StatelessWidget {
           Expanded(
             child: TabBarView(
               children: [
+                _AiChatTab(client: client),
                 _GalleryTab(client: client),
                 _OrganizerTab(client: client),
                 _SessionsTab(client: client),
@@ -1398,4 +1400,328 @@ class _ErrorPane extends StatelessWidget {
       ],
     ),
   );
+}
+
+
+class _AiChatTab extends StatefulWidget {
+  final PiApiClient client;
+
+  const _AiChatTab({required this.client});
+
+  @override
+  State<_AiChatTab> createState() => _AiChatTabState();
+}
+
+class _AiChatTabState extends State<_AiChatTab> {
+  final _inputController = TextEditingController();
+  final _scrollController = ScrollController();
+  final List<Map<String, String>> _messages = [];
+  String _model = 'qwen3:1.7b';
+  bool _sending = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _inputController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _send() async {
+    final text = _inputController.text.trim();
+    if (text.isEmpty || _sending) return;
+
+    _inputController.clear();
+    setState(() {
+      _error = null;
+      _sending = true;
+      _messages.add({'role': 'user', 'content': text});
+    });
+    _scrollToBottom();
+
+    try {
+      final history = _messages
+          .take(_messages.length - 1)
+          .toList(growable: false);
+      final response = await widget.client.post(
+        'ai/chat',
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'model': _model,
+          'messages': [
+            ...history,
+            {'role': 'user', 'content': text},
+          ],
+        }),
+        timeout: const Duration(seconds: 180),
+      );
+      final payload = widget.client.decodeObject(response);
+      if (response.statusCode != 200) {
+        throw widget.client.responseException(response);
+      }
+      final answer = payload['message'] is Map
+          ? (payload['message']['content']?.toString() ?? '').trim()
+          : '';
+      if (answer.isEmpty) {
+        throw Exception('Die KI hat eine leere Antwort zurückgegeben.');
+      }
+      if (!mounted) return;
+      setState(() {
+        _messages.add({'role': 'assistant', 'content': answer});
+      });
+      _scrollToBottom();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString();
+      });
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
+  void _clearChat() {
+    if (_sending) return;
+    setState(() {
+      _messages.clear();
+      _error = null;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              child: Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: colorScheme.primary.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Icon(Icons.auto_awesome_rounded,
+                        color: colorScheme.primary),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Pi-Control AI',
+                            style: TextStyle(fontWeight: FontWeight.w900)),
+                        Text('Lokale KI über deinen CachyOS-PC',
+                            style: TextStyle(fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                  DropdownButton<String>(
+                    value: _model,
+                    underline: const SizedBox.shrink(),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'qwen3:1.7b',
+                        child: Text('1.7B'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'qwen3:4b',
+                        child: Text('4B'),
+                      ),
+                    ],
+                    onChanged: _sending
+                        ? null
+                        : (value) {
+                            if (value != null) setState(() => _model = value);
+                          },
+                  ),
+                  IconButton(
+                    tooltip: 'Chat leeren',
+                    onPressed: _clearChat,
+                    icon: const Icon(Icons.delete_outline_rounded),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        Expanded(
+          child: _messages.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(28),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.forum_outlined,
+                            size: 58, color: colorScheme.primary),
+                        const SizedBox(height: 14),
+                        const Text(
+                          'Was möchtest du wissen?',
+                          style: TextStyle(
+                              fontSize: 21, fontWeight: FontWeight.w900),
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Stelle eine Frage. Deine Unterhaltung bleibt in diesem Chatfenster.',
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                  itemCount: _messages.length + (_sending ? 1 : 0),
+                  itemBuilder: (context, index) {
+                    if (index == _messages.length) {
+                      return const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Padding(
+                          padding: EdgeInsets.all(12),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                              SizedBox(width: 10),
+                              Text('KI denkt nach …'),
+                            ],
+                          ),
+                        ),
+                      );
+                    }
+                    final message = _messages[index];
+                    final isUser = message['role'] == 'user';
+                    return Align(
+                      alignment: isUser
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft,
+                      child: Container(
+                        constraints: const BoxConstraints(maxWidth: 760),
+                        margin: const EdgeInsets.symmetric(vertical: 5),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 15, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: isUser
+                              ? colorScheme.primary.withValues(alpha: 0.20)
+                              : colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: isUser
+                                ? colorScheme.primary.withValues(alpha: 0.25)
+                                : Colors.white.withValues(alpha: 0.06),
+                          ),
+                        ),
+                        child: SelectableText(
+                          message['content'] ?? '',
+                          style: const TextStyle(fontSize: 15, height: 1.45),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+            child: Material(
+              color: colorScheme.errorContainer,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    Icon(Icons.error_outline, color: colorScheme.onErrorContainer),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _error!,
+                        style: TextStyle(color: colorScheme.onErrorContainer),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => setState(() => _error = null),
+                      icon: Icon(Icons.close, color: colorScheme.onErrorContainer),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _inputController,
+                    minLines: 1,
+                    maxLines: 5,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _send(),
+                    decoration: InputDecoration(
+                      hintText: 'Frage an die KI …',
+                      filled: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(18),
+                        borderSide: BorderSide.none,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 13),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  height: 50,
+                  width: 50,
+                  child: FilledButton(
+                    onPressed: _sending ? null : _send,
+                    style: FilledButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                    child: _sending
+                        ? const SizedBox(
+                            width: 19,
+                            height: 19,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.send_rounded),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
