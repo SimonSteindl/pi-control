@@ -29,9 +29,9 @@ jobs:
       - name: Check metadata version matches app
         shell: bash
         run: |
-          grep -q "^version: 2.4.1+16$" app/pubspec.yaml
-          grep -q "^CurrentVersion: '2.4.1'$" fdroid/metadata/io.github.simonsteindl.picontrol.yml
-          grep -q "^CurrentVersionCode: 16$" fdroid/metadata/io.github.simonsteindl.picontrol.yml
+          grep -q "^version: 2.4.2+17$" app/pubspec.yaml
+          grep -q "^CurrentVersion: '2.4.2'$" fdroid/metadata/io.github.simonsteindl.picontrol.yml
+          grep -q "^CurrentVersionCode: 17$" fdroid/metadata/io.github.simonsteindl.picontrol.yml
 
       - name: Resolve locked dependencies
         working-directory: app
