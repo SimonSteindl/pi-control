@@ -1947,7 +1947,7 @@ def api_ai_chat():
         messages.append({"role": role, "content": content})
 
     # Save memories only when the user explicitly asks the assistant to remember them.
-    latest_user_message = messages[-1]["content"] if messages else ""
+    latest_user_message = messages[-1]["content"] if messages and messages[-1]["role"] == "user" else ""
     remember_match = re.match(
         r"^\s*(?:merk(?:e)?\s+dir|speicher(?:e)?(?:\s+dir)?|remember(?:\s+that|\s+this)?)"
         r"\s*[,:\-]?\s*(.+?)\s*$",
