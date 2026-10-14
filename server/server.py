@@ -1950,7 +1950,7 @@ def api_ai_chat():
     latest_user_message = messages[-1]["content"] if messages and messages[-1]["role"] == "user" else ""
     remember_match = re.match(
         r"^\s*(?:merk(?:e)?\s+dir|speicher(?:e)?(?:\s+dir)?|remember(?:\s+that|\s+this)?)"
-        r"\s*[,:\-]?\s*(.+?)\s*$",
+        r"(?:\s+bitte)?\s*[,:\-]?\s*(.+?)\s*$",
         latest_user_message,
         flags=re.IGNORECASE | re.DOTALL,
     )
