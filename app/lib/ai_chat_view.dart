@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth.dart';
 
@@ -29,12 +30,14 @@ class _AiChatViewState extends State<AiChatView> {
   bool _busy = false;
   bool _loadingMemories = false;
   String? _error;
+  static const String _chatStorageKey = 'pi_control_ai_chat_messages';
 
   bool get _en => widget.english;
 
   @override
   void initState() {
     super.initState();
+    _restoreChat();
     _loadMemories();
   }
 
@@ -43,6 +46,36 @@ class _AiChatViewState extends State<AiChatView> {
     _input.dispose();
     _scroll.dispose();
     super.dispose();
+  }
+
+  Future<void> _restoreChat() async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      final raw = preferences.getString(_chatStorageKey);
+      if (raw == null || raw.isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! List || !mounted) return;
+      setState(() {
+        _messages
+          ..clear()
+          ..addAll(decoded.whereType<Map>().map((item) => {
+            'role': '${item['role'] ?? 'assistant'}',
+            'content': '${item['content'] ?? ''}',
+          }));
+      });
+      _scrollToBottom();
+    } catch (_) {
+      // Ignore malformed saved chat and let the user start a fresh conversation.
+    }
+  }
+
+  Future<void> _saveChat() async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString(_chatStorageKey, jsonEncode(_messages));
+    } catch (_) {
+      // Chat still works if local persistence is unavailable.
+    }
   }
 
   Future<void> _loadMemories() async {
@@ -89,6 +122,7 @@ class _AiChatViewState extends State<AiChatView> {
       _busy = true;
       _messages.add({'role': 'user', 'content': text});
     });
+    await _saveChat();
     _scrollToBottom();
 
     try {
@@ -109,6 +143,7 @@ class _AiChatViewState extends State<AiChatView> {
       }
       if (!mounted) return;
       setState(() => _messages.add({'role': 'assistant', 'content': content.trim()}));
+      await _saveChat();
       if (RegExp(r'^\s*(merk(?:e)?\s+dir|speicher|remember)', caseSensitive: false).hasMatch(text)) {
         await _loadMemories();
       }
@@ -205,6 +240,26 @@ class _AiChatViewState extends State<AiChatView> {
     );
   }
 
+  TextSpan _formatMessage(String content, TextStyle? baseStyle) {
+    final spans = <TextSpan>[];
+    final pattern = RegExp(r'\\*\\*(.+?)\\*\\*', dotAll: true);
+    var cursor = 0;
+    for (final match in pattern.allMatches(content)) {
+      if (match.start > cursor) {
+        spans.add(TextSpan(text: content.substring(cursor, match.start)));
+      }
+      spans.add(TextSpan(
+        text: match.group(1),
+        style: const TextStyle(fontWeight: FontWeight.bold),
+      ));
+      cursor = match.end;
+    }
+    if (cursor < content.length) {
+      spans.add(TextSpan(text: content.substring(cursor)));
+    }
+    return TextSpan(style: baseStyle, children: spans);
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -267,10 +322,13 @@ class _AiChatViewState extends State<AiChatView> {
               ),
               const Spacer(),
               TextButton.icon(
-                onPressed: _busy || _messages.isEmpty ? null : () => setState(() {
-                  _messages.clear();
-                  _error = null;
-                }),
+                onPressed: _busy || _messages.isEmpty ? null : () async {
+                  setState(() {
+                    _messages.clear();
+                    _error = null;
+                  });
+                  await _saveChat();
+                },
                 icon: const Icon(Icons.delete_sweep_outlined),
                 label: Text(_en ? 'Clear' : 'Leeren'),
               ),
@@ -336,7 +394,7 @@ class _AiChatViewState extends State<AiChatView> {
                                 : theme.colorScheme.surfaceContainerHighest,
                             child: Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                              child: SelectableText(message['content'] ?? ''),
+                              child: SelectableText.rich(_formatMessage(message['content'] ?? '', theme.textTheme.bodyMedium)),
                             ),
                           ),
                         ),
