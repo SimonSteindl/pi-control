@@ -1858,22 +1858,36 @@ def format_ai_memory_context(user_id):
         total = 0
         for item in memories:
             line = f"- {item['memory']}"
-            if total + len(line) > 7000:
+            if total + len(line) > 4000:
                 break
             parts.append(line)
             total += len(line)
         saved_context = "\n".join(parts) or "Noch keine persönlichen Erinnerungen gespeichert."
-    return (
-        "Projektwissen für Pi-Control AI:\n"
-        "- Pi-Control ist das Projekt des Nutzers zum Überwachen und Verwalten eines Raspberry Pi.\n"
-        "- Die Flutter-App liegt im Repository unter app/; der Flask-Server liegt unter server/server.py.\n"
-        "- Die Chat-API ist serverseitig authentifiziert. Ollama wird über PI_CONTROL_OLLAMA_URL angesprochen.\n"
-        "- Aktuell erlaubte Ollama-Modelle im Servercode: qwen3:1.7b und qwen3:4b.\n"
-        "- Nutze die folgenden gespeicherten Erinnerungen als Kontext, nicht als garantiert aktuelle Live-Daten.\n"
-        "- Erfinde keine aktuellen Versionen, Laufzeitstatus, IP-Adressen oder Testergebnisse. Frage nach, wenn das wichtig ist.\n"
-        "- Speichere niemals Passwörter, API-Schlüssel, Tokens oder andere Geheimnisse.\n\n"
-        "Gespeicherte Erinnerungen dieses Kontos:\n" + saved_context
-    )
+
+    # Load the repository's master knowledge file when it is present on the Pi.
+    # Bound the size so local Ollama models with limited context can still answer.
+    knowledge_path = BASE_DIR / "docs" / "AI-MASTER-GEDAECHTNIS.md"
+    try:
+        project_knowledge = knowledge_path.read_text(encoding="utf-8").strip()[:5000]
+    except OSError:
+        project_knowledge = ""
+
+    sections = [
+        "Projektwissen für Pi-Control AI:",
+        "- Pi-Control verwaltet und überwacht einen Raspberry Pi.",
+        "- Die Flutter-App liegt unter app/; der Flask-Server liegt unter server/server.py.",
+        "- Die Chat-API ist serverseitig authentifiziert. Ollama wird über PI_CONTROL_OLLAMA_URL angesprochen.",
+        "- Erfinde keine aktuellen Versionen, Laufzeitstatus, IP-Adressen oder Testergebnisse. Prüfe sie, wenn das wichtig ist.",
+        "- Speichere niemals Passwörter, API-Schlüssel, Tokens oder andere Geheimnisse.",
+    ]
+    if project_knowledge:
+        sections.extend([
+            "",
+            "Master-Wissensdokument (Projektinformationen können veraltet sein; Live-Zustand immer prüfen):",
+            project_knowledge,
+        ])
+    sections.extend(["", "Gespeicherte Erinnerungen dieses Kontos:", saved_context])
+    return "\n".join(sections)
 
 
 @app.get("/api/ai/memory")
