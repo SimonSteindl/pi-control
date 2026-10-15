@@ -25,8 +25,9 @@ jobs:
         with:
           python-version: '3.13'
       - name: Check Python syntax
-        run: python -m py_compile pc-agent/agent.py
+        run: python -m py_compile pc-agent/agent.py pc-agent/local_api.py pc-agent/test_local_api.py
       - name: Smoke test
         run: |
           python pc-agent/agent.py info
           python pc-agent/agent.py status
+          python pc-agent/test_local_api.py
