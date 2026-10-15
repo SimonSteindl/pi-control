@@ -14,6 +14,7 @@ import 'backup_view.dart';
 import 'package:http/http.dart' as http;
 
 import 'auth.dart';
+import 'ai_chat_view.dart';
 import 'file_manager_view.dart';
 import 'feature_hub_view.dart';
 import 'login_views.dart';
@@ -1340,6 +1341,7 @@ class _DashboardPageState extends State<DashboardPage>
 
     final pageKeys = <String>[
       'dashboard',
+      'ai',
       'weather',
       if (widget.session.can('files_view')) 'files',
       if (widget.session.can('terminal_access')) 'terminal',
@@ -1350,6 +1352,7 @@ class _DashboardPageState extends State<DashboardPage>
     final currentPage = pageKeys[currentPageIndex];
     final narrowScreen = MediaQuery.sizeOf(context).width < 600;
     final pageTitle = switch (currentPage) {
+      'ai' => 'Pi-Control AI',
       'weather' => english ? 'Flight weather' : 'Flugwetter',
       'files' => english ? 'Files' : 'Dateimanager',
       'terminal' => 'Terminal',
@@ -1366,6 +1369,12 @@ class _DashboardPageState extends State<DashboardPage>
             label: english ? 'Overview' : 'Übersicht',
             icon: Icons.space_dashboard_outlined,
             selectedIcon: Icons.space_dashboard_rounded,
+          ),
+          'ai' => PiNavigationItem(
+            keyName: key,
+            label: 'KI-Chat',
+            icon: Icons.auto_awesome_outlined,
+            selectedIcon: Icons.auto_awesome_rounded,
           ),
           'weather' => PiNavigationItem(
             keyName: key,
@@ -2158,6 +2167,11 @@ class _DashboardPageState extends State<DashboardPage>
 
                         const SizedBox(height: 8),
                       ],
+                    ),
+                    AiChatView(
+                      client: widget.client,
+                      accentColor: widget.accentColor,
+                      english: english,
                     ),
                     AviationWeatherView(
                       accentColor: widget.accentColor,
