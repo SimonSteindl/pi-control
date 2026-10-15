@@ -325,6 +325,7 @@ class _DashboardPageState extends State<DashboardPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _restoreSelectedPage();
     checkAppVersion();
     loadCachedDashboard();
     loadDashboardLayout();
@@ -334,6 +335,29 @@ class _DashboardPageState extends State<DashboardPage>
       _startRefreshTimers();
     } else {
       loading = false;
+    }
+  }
+
+  Future<void> _restoreSelectedPage() async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      final savedIndex = preferences.getInt('pi_control_selected_page_index');
+      if (!mounted || savedIndex == null) return;
+      setState(() => selectedPageIndex = savedIndex);
+    } catch (_) {
+      // Keep the default page if preferences cannot be read.
+    }
+  }
+
+  Future<void> _persistSelectedPage() async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setInt(
+        'pi_control_selected_page_index',
+        selectedPageIndex,
+      );
+    } catch (_) {
+      // Navigation should still work if preferences are unavailable.
     }
   }
 
@@ -1411,6 +1435,7 @@ class _DashboardPageState extends State<DashboardPage>
 
     void selectPage(int index) {
       setState(() => selectedPageIndex = index);
+      _persistSelectedPage();
       if (index == 0) {
         loadData();
         loadHistory();
@@ -1671,6 +1696,7 @@ class _DashboardPageState extends State<DashboardPage>
                                       'files',
                                     );
                                   });
+                                  _persistSelectedPage();
                                 }
                               : null,
                         ),
@@ -1687,12 +1713,14 @@ class _DashboardPageState extends State<DashboardPage>
                                   'files',
                                 ),
                               );
+                              _persistSelectedPage();
                             } else if (key == 'more') {
                               setState(
                                 () => selectedPageIndex = pageKeys.indexOf(
                                   'more',
                                 ),
                               );
+                              _persistSelectedPage();
                             } else if (key == 'backups' &&
                                 widget.session.isAdmin) {
                               showBackupManager(context, widget.client);
