@@ -123,7 +123,7 @@ jobs:
 
   deploy:
     name: Deploy dashboard to Cloudflare (manual only)
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     needs: build
     runs-on: ubuntu-latest
     steps:
