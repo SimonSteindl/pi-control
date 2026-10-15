@@ -1,0 +1,377 @@
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+
+import 'auth.dart';
+
+class AiChatView extends StatefulWidget {
+  final PiApiClient client;
+  final Color accentColor;
+  final bool english;
+
+  const AiChatView({
+    super.key,
+    required this.client,
+    required this.accentColor,
+    required this.english,
+  });
+
+  @override
+  State<AiChatView> createState() => _AiChatViewState();
+}
+
+class _AiChatViewState extends State<AiChatView> {
+  final TextEditingController _input = TextEditingController();
+  final ScrollController _scroll = ScrollController();
+  final List<Map<String, String>> _messages = [];
+  List<Map<String, dynamic>> _memories = [];
+  String _model = 'qwen3:1.7b';
+  bool _busy = false;
+  bool _loadingMemories = false;
+  String? _error;
+
+  bool get _en => widget.english;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMemories();
+  }
+
+  @override
+  void dispose() {
+    _input.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadMemories() async {
+    if (_loadingMemories) return;
+    setState(() => _loadingMemories = true);
+    try {
+      final response = await widget.client.get(
+        'ai/memory',
+        timeout: const Duration(seconds: 15),
+      );
+      if (response.statusCode != 200) {
+        throw widget.client.responseException(response);
+      }
+      final data = widget.client.decodeObject(response);
+      final values = data['memories'];
+      if (mounted) {
+        setState(() {
+          _memories = values is List
+              ? values.whereType<Map>().map((value) => Map<String, dynamic>.from(value)).toList()
+              : <Map<String, dynamic>>[];
+        });
+      }
+    } catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _loadingMemories = false);
+    }
+  }
+
+  Future<void> _send() async {
+    final text = _input.text.trim();
+    if (text.isEmpty || _busy) return;
+
+    _input.clear();
+    final history = <Map<String, String>>[
+      ..._messages,
+      {'role': 'user', 'content': text},
+    ];
+    final boundedHistory = history.length > 12
+        ? history.sublist(history.length - 12)
+        : history;
+    setState(() {
+      _error = null;
+      _busy = true;
+      _messages.add({'role': 'user', 'content': text});
+    });
+    _scrollToBottom();
+
+    try {
+      final response = await widget.client.post(
+        'ai/chat',
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode({'model': _model, 'messages': boundedHistory}),
+        timeout: const Duration(seconds: 160),
+      );
+      if (response.statusCode != 200) {
+        throw widget.client.responseException(response);
+      }
+      final data = widget.client.decodeObject(response);
+      final message = data['message'];
+      final content = message is Map ? message['content']?.toString() : null;
+      if (content == null || content.trim().isEmpty) {
+        throw ApiException(_en ? 'The AI returned an empty answer.' : 'Die KI hat keine Antwort geliefert.');
+      }
+      if (!mounted) return;
+      setState(() => _messages.add({'role': 'assistant', 'content': content.trim()}));
+      if (RegExp(r'^\s*(merk(?:e)?\s+dir|speicher|remember)', caseSensitive: false).hasMatch(text)) {
+        await _loadMemories();
+      }
+      _scrollToBottom();
+    } catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scroll.hasClients) {
+        _scroll.animateTo(
+          _scroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  Future<void> _deleteMemory(Map<String, dynamic> memory) async {
+    final id = int.tryParse('${memory['id'] ?? ''}');
+    if (id == null) return;
+    final response = await widget.client.delete('ai/memory/$id');
+    if (response.statusCode != 200) {
+      throw widget.client.responseException(response);
+    }
+    await _loadMemories();
+  }
+
+  Future<void> _showMemories() async {
+    await _loadMemories();
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.sizeOf(sheetContext).height * 0.7,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.psychology_alt_rounded),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        _en ? 'Saved memories' : 'Gespeicherte Erinnerungen',
+                        style: Theme.of(sheetContext).textTheme.titleLarge,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: _memories.isEmpty
+                    ? Center(child: Text(_en ? 'No saved memories yet.' : 'Noch keine Erinnerungen gespeichert.'))
+                    : ListView.separated(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        itemCount: _memories.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final item = _memories[index];
+                          return ListTile(
+                            leading: const Icon(Icons.bookmark_outline_rounded),
+                            title: Text('${item['memory'] ?? item['content'] ?? item['text'] ?? ''}'),
+                            trailing: IconButton(
+                              tooltip: _en ? 'Delete memory' : 'Erinnerung löschen',
+                              icon: const Icon(Icons.delete_outline_rounded),
+                              onPressed: () async {
+                                try {
+                                  await _deleteMemory(item);
+                                  if (sheetContext.mounted) Navigator.pop(sheetContext);
+                                  await _showMemories();
+                                } catch (error) {
+                                  if (mounted) setState(() => _error = error.toString());
+                                }
+                              },
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: widget.accentColor.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Icon(Icons.auto_awesome_rounded, color: widget.accentColor),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Pi-Control AI', style: theme.textTheme.titleLarge),
+                        Text(_en ? 'Private assistant' : 'Dein privater Assistent', style: theme.textTheme.bodySmall),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: _en ? 'Saved memories' : 'Erinnerungen',
+                    onPressed: _showMemories,
+                    icon: Badge(
+                      label: Text('${_memories.length}'),
+                      isLabelVisible: _memories.isNotEmpty,
+                      child: const Icon(Icons.psychology_alt_outlined),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Text(_en ? 'Model' : 'Modell'),
+              const SizedBox(width: 10),
+              DropdownButton<String>(
+                value: _model,
+                onChanged: _busy ? null : (value) {
+                  if (value != null) setState(() => _model = value);
+                },
+                items: const [
+                  DropdownMenuItem(value: 'qwen3:1.7b', child: Text('Qwen3 1.7B')),
+                  DropdownMenuItem(value: 'qwen3:4b', child: Text('Qwen3 4B')),
+                ],
+              ),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: _busy || _messages.isEmpty ? null : () => setState(() {
+                  _messages.clear();
+                  _error = null;
+                }),
+                icon: const Icon(Icons.delete_sweep_outlined),
+                label: Text(_en ? 'Clear' : 'Leeren'),
+              ),
+            ],
+          ),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Material(
+                color: theme.colorScheme.errorContainer,
+                borderRadius: BorderRadius.circular(12),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text(_error!, style: TextStyle(color: theme.colorScheme.onErrorContainer)),
+                ),
+              ),
+            ),
+          Expanded(
+            child: _messages.isEmpty
+                ? Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.forum_outlined, size: 56, color: widget.accentColor),
+                          const SizedBox(height: 12),
+                          Text(_en ? 'What can I help you with?' : 'Wobei kann ich dir helfen?', style: theme.textTheme.titleLarge, textAlign: TextAlign.center),
+                          const SizedBox(height: 8),
+                          Text(
+                            _en
+                                ? 'Ask a question or say “Remember …” to save a memory.'
+                                : 'Stell eine Frage oder schreibe „Merk dir …“, um eine Erinnerung zu speichern.',
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : ListView.builder(
+                    controller: _scroll,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    itemCount: _messages.length + (_busy ? 1 : 0),
+                    itemBuilder: (context, index) {
+                      if (_busy && index == _messages.length) {
+                        return const Align(
+                          alignment: Alignment.centerLeft,
+                          child: Padding(
+                            padding: EdgeInsets.all(12),
+                            child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                          ),
+                        );
+                      }
+                      final message = _messages[index];
+                      final isUser = message['role'] == 'user';
+                      return Align(
+                        alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 760),
+                          child: Card(
+                            color: isUser
+                                ? widget.accentColor.withValues(alpha: 0.16)
+                                : theme.colorScheme.surfaceContainerHighest,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                              child: SelectableText(message['content'] ?? ''),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _input,
+                  minLines: 1,
+                  maxLines: 5,
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => _send(),
+                  decoration: InputDecoration(
+                    hintText: _en ? 'Message Pi-Control AI…' : 'Nachricht an Pi-Control AI…',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(18)),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton.filled(
+                onPressed: _busy ? null : _send,
+                icon: const Icon(Icons.send_rounded),
+                tooltip: _en ? 'Send' : 'Senden',
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
