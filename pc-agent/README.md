@@ -51,3 +51,26 @@ Ein anderer Projektordner kann mit `--workspace PFAD` angegeben werden.
 - Vor Installationen, Admin-Aktionen, Löschen, Neustarts und Netzwerkänderungen extra fragen.
 - Keine Passwörter, Tokens oder API-Schlüssel in Git einchecken.
 - Erst danach eine lokale, authentifizierte Verbindung zum Pi-Control-Chat entwickeln.
+
+
+## Lokale API für eine spätere Chat-Verbindung
+
+Die optionale lokale API lauscht ausschließlich auf `127.0.0.1:8765`. Sie ist nicht für die Veröffentlichung über Router, Portweiterleitung, ngrok oder öffentliche Tunnel gedacht.
+
+Start:
+- Windows: `python .\\pc-agent\\agent.py serve`
+- CachyOS/Linux: `python3 ./pc-agent/agent.py serve`
+
+Beim ersten Start wird ein zufälliges Zugriffstoken unter `~/.pi-control-agent/token` angelegt (Windows: im Benutzerprofil). Das Token niemals in GitHub, Screenshots oder Chatnachrichten veröffentlichen.
+
+Geschützte Endpunkte:
+- `GET /v1/status`
+- `GET /v1/git/status`
+- `GET /v1/git/diff`
+- `GET /v1/file?path=...` (nur Dateien im Projektordner, maximal 256 KB)
+- `POST /v1/open` mit `{"app":"editor"}`, `browser` oder `file-manager`
+- `POST /v1/tests`
+
+Alle Anfragen brauchen `Authorization: Bearer <Token>`. Die Browser-CORS-Freigabe ist auf die veröffentlichte Pi-Control-Dashboard-Origin begrenzt. Andere Origins sind nicht freigegeben. Die API führt keine beliebigen Shell-Befehle aus und bietet keine Datei-Schreib- oder Löschroute.
+
+**Noch nicht verbunden:** Das Dashboard ruft diese API noch nicht auf. Eine sichere Chat-Verbindung erfordert als nächsten Schritt eine UI mit Token-Eingabe und sichtbarer Bestätigung für Aktionen. Desktop-Maus/Tastatur-Automatisierung ist ebenfalls noch nicht implementiert.
