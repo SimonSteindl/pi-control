@@ -1,4 +1,4 @@
-name: Build Android APK on Release
+name: Build Android APK
 
 on:
   push:
@@ -12,8 +12,6 @@ on:
       - 'app/**'
       - '.github/workflows/build-apk-release.yml'
   workflow_dispatch:
-  release:
-    types: [published]
 
 permissions:
   contents: write
@@ -47,9 +45,25 @@ jobs:
           path: app/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
 
-      - name: Upload APK to GitHub Release
-        if: github.event_name == 'release'
+      - name: Publish APK as GitHub prerelease
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" "app/build/app/outputs/flutter-apk/app-release.apk" --clobber --repo "${{ github.repository }}"
+          RUN_NUMBER: ${{ github.run_number }}
+          REPOSITORY: ${{ github.repository }}
+        working-directory: app
+        run: |
+          APP_VERSION="$(sed -n 's/^version: *\([^+ ]*\).*/\1/p' pubspec.yaml | head -n 1)"
+          if [ -z "$APP_VERSION" ]; then
+            echo "Could not read app version from app/pubspec.yaml"
+            exit 1
+          fi
+
+          RELEASE_TAG="v${APP_VERSION}-build.${RUN_NUMBER}"
+          RELEASE_TITLE="Pi-Control ${APP_VERSION} (Build ${RUN_NUMBER})"
+
+          gh release create "$RELEASE_TAG" "build/app/outputs/flutter-apk/app-release.apk" \
+            --repo "$REPOSITORY" \
+            --title "$RELEASE_TITLE" \
+            --notes "Automatisch erstellter Vorab-Release aus dem main-Branch. Build: ${RUN_NUMBER}." \
+            --prerelease
