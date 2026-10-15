@@ -1,0 +1,32 @@
+name: PC-Agent checks
+
+on:
+  pull_request:
+    paths:
+      - 'pc-agent/**'
+      - '.github/workflows/pc-agent-tests.yml'
+  push:
+    branches: [main, feature/cross-platform-pc-agent]
+    paths:
+      - 'pc-agent/**'
+      - '.github/workflows/pc-agent-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  agent-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Check Python syntax
+        run: python -m py_compile pc-agent/agent.py
+      - name: Smoke test
+        run: |
+          python pc-agent/agent.py info
+          python pc-agent/agent.py status
