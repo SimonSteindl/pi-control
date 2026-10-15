@@ -8,6 +8,7 @@ import json
 import mimetypes
 import os
 import platform
+import re
 import secrets
 import select
 import signal
@@ -46,6 +47,7 @@ HISTORY_FILE = BASE_DIR / "history.json"
 BENCHMARK_FILE = BASE_DIR / "benchmark.json"
 BENCHMARK_HISTORY_FILE = BASE_DIR / "benchmark_history.json"
 AUTH_DB_FILE = BASE_DIR / "auth.db"
+AI_MEMORY_DB_FILE = BASE_DIR / "ai_memory.db"
 INITIAL_ADMIN_FILE = BASE_DIR / "initial_admin.json"
 BACKUP_DIRECTORY = Path(USB_PATH) / "Backups" / "Pi-Control"
 BACKUP_SCRIPT = BASE_DIR / "backup.sh"
@@ -1772,6 +1774,142 @@ def process_scheduled_tasks():
                 send_ntfy("Pi Control: Geplante Aufgabe fehlgeschlagen", f"{row['name']}: {exc}", priority="high", tags="warning")
 
 
+def initialize_ai_memory_database():
+    """Create the private, per-user long-term memory store for Pi-Control AI."""
+    BASE_DIR.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(AI_MEMORY_DB_FILE, timeout=10) as connection:
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS ai_memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                memory TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE (user_id, memory)
+            )
+        """)
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS ai_memories_user_updated "
+            "ON ai_memories(user_id, updated_at DESC)"
+        )
+    try:
+        os.chmod(AI_MEMORY_DB_FILE, 0o600)
+    except OSError:
+        app.logger.warning("Konnte Dateirechte für das KI-Gedächtnis nicht setzen")
+
+
+def ai_memory_connection():
+    initialize_ai_memory_database()
+    connection = sqlite3.connect(AI_MEMORY_DB_FILE, timeout=10)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def save_ai_memory(user_id, memory):
+    """Store one explicit user memory; never store likely credentials."""
+    memory = " ".join(str(memory).split()).strip()
+    if not memory or len(memory) > 1000:
+        return False, "Eine Erinnerung muss zwischen 1 und 1000 Zeichen lang sein."
+    secret_pattern = re.compile(
+        r"(?i)(password|passwort|api[\s_-]?key|access[\s_-]?token|"
+        r"refresh[\s_-]?token|secret|private[\s_-]?key)\s*[:=]\s*\S+"
+    )
+    if secret_pattern.search(memory):
+        return False, "Passwörter, API-Schlüssel und andere Geheimnisse werden nicht gespeichert."
+    now = int(time.time())
+    with ai_memory_connection() as connection:
+        connection.execute(
+            """INSERT INTO ai_memories (user_id, memory, created_at, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(user_id, memory)
+               DO UPDATE SET updated_at = excluded.updated_at""",
+            (int(user_id), memory, now, now),
+        )
+        # Keep the newest 100 memories per account.
+        connection.execute(
+            """DELETE FROM ai_memories
+               WHERE user_id = ? AND id NOT IN (
+                   SELECT id FROM ai_memories
+                   WHERE user_id = ?
+                   ORDER BY updated_at DESC, id DESC LIMIT 100
+               )""",
+            (int(user_id), int(user_id)),
+        )
+    return True, ""
+
+
+def get_ai_memories(user_id, limit=40):
+    with ai_memory_connection() as connection:
+        rows = connection.execute(
+            """SELECT id, memory, created_at, updated_at
+               FROM ai_memories WHERE user_id = ?
+               ORDER BY updated_at DESC, id DESC LIMIT ?""",
+            (int(user_id), max(1, min(int(limit), 100))),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def format_ai_memory_context(user_id):
+    memories = get_ai_memories(user_id, limit=40)
+    if not memories:
+        saved_context = "Noch keine persönlichen Erinnerungen gespeichert."
+    else:
+        parts = []
+        total = 0
+        for item in memories:
+            line = f"- {item['memory']}"
+            if total + len(line) > 7000:
+                break
+            parts.append(line)
+            total += len(line)
+        saved_context = "\n".join(parts) or "Noch keine persönlichen Erinnerungen gespeichert."
+    return (
+        "Projektwissen für Pi-Control AI:\n"
+        "- Pi-Control ist das Projekt des Nutzers zum Überwachen und Verwalten eines Raspberry Pi.\n"
+        "- Die Flutter-App liegt im Repository unter app/; der Flask-Server liegt unter server/server.py.\n"
+        "- Die Chat-API ist serverseitig authentifiziert. Ollama wird über PI_CONTROL_OLLAMA_URL angesprochen.\n"
+        "- Aktuell erlaubte Ollama-Modelle im Servercode: qwen3:1.7b und qwen3:4b.\n"
+        "- Nutze die folgenden gespeicherten Erinnerungen als Kontext, nicht als garantiert aktuelle Live-Daten.\n"
+        "- Erfinde keine aktuellen Versionen, Laufzeitstatus, IP-Adressen oder Testergebnisse. Frage nach, wenn das wichtig ist.\n"
+        "- Speichere niemals Passwörter, API-Schlüssel, Tokens oder andere Geheimnisse.\n\n"
+        "Gespeicherte Erinnerungen dieses Kontos:\n" + saved_context
+    )
+
+
+@app.get("/api/ai/memory")
+@authentication_required()
+def api_ai_memory_list():
+    return jsonify({"ok": True, "memories": get_ai_memories(current_user_id(), limit=100)})
+
+
+@app.post("/api/ai/memory")
+@authentication_required()
+def api_ai_memory_create():
+    payload = request.get_json(silent=True) or {}
+    memory = payload.get("memory")
+    if not isinstance(memory, str):
+        return jsonify({"ok": False, "error": "Bitte eine Erinnerung als Text senden."}), 400
+    saved, error = save_ai_memory(current_user_id(), memory)
+    if not saved:
+        return jsonify({"ok": False, "error": error}), 400
+    write_audit("ai.memory.save", "project-memory", {"length": len(memory)})
+    return jsonify({"ok": True, "message": "Erinnerung gespeichert."})
+
+
+@app.delete("/api/ai/memory/<int:memory_id>")
+@authentication_required()
+def api_ai_memory_delete(memory_id):
+    with ai_memory_connection() as connection:
+        cursor = connection.execute(
+            "DELETE FROM ai_memories WHERE id = ? AND user_id = ?",
+            (int(memory_id), current_user_id()),
+        )
+    if cursor.rowcount == 0:
+        return jsonify({"ok": False, "error": "Erinnerung nicht gefunden."}), 404
+    write_audit("ai.memory.delete", str(memory_id))
+    return jsonify({"ok": True, "message": "Erinnerung gelöscht."})
+
+
 @app.post("/api/ai/chat")
 @authentication_required()
 def api_ai_chat():
@@ -1795,7 +1933,7 @@ def api_ai_chat():
 
     messages = [{
         "role": "system",
-        "content": "Du bist Pi-Control AI, ein hilfreicher Assistent. Antworte standardmäßig auf Deutsch, klar und verständlich. Du hast keinen direkten Zugriff auf den Raspberry Pi oder dessen Live-Daten, außer der Nutzer gibt sie dir im Chat.",
+        "content": "Du bist Pi-Control AI, ein hilfreicher Assistent. Antworte standardmäßig auf Deutsch, klar und verständlich. Du hast keinen direkten Zugriff auf den Raspberry Pi oder dessen Live-Daten, außer der Nutzer gibt sie dir im Chat.\n\n" + format_ai_memory_context(current_user_id()),
     }]
     for item in raw_messages[-12:]:
         if not isinstance(item, dict):
@@ -1807,6 +1945,20 @@ def api_ai_chat():
         if len(content) > 4000:
             content = content[:4000]
         messages.append({"role": role, "content": content})
+
+    # Save memories only when the user explicitly asks the assistant to remember them.
+    latest_user_message = messages[-1]["content"] if messages and messages[-1]["role"] == "user" else ""
+    remember_match = re.match(
+        r"^\s*(?:merk(?:e)?\s+dir|speicher(?:e)?(?:\s+dir)?|remember(?:\s+that|\s+this)?)"
+        r"(?:\s+bitte)?\s*[,:\-]?\s*(.+?)\s*$",
+        latest_user_message,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if remember_match:
+        memory_text = remember_match.group(1).strip()
+        saved, _memory_error = save_ai_memory(current_user_id(), memory_text)
+        if saved:
+            app.logger.info("Pi-Control AI hat eine explizite Erinnerung gespeichert")
 
     if len(messages) < 2 or messages[-1]["role"] != "user":
         return jsonify({"ok": False, "error": "Die letzte Nachricht muss eine Frage sein."}), 400
