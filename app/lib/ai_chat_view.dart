@@ -242,7 +242,7 @@ class _AiChatViewState extends State<AiChatView> {
 
   TextSpan _formatMessage(String content, TextStyle? baseStyle) {
     final spans = <TextSpan>[];
-    final pattern = RegExp(r'\\*\\*(.+?)\\*\\*', dotAll: true);
+    final pattern = RegExp(r'\*\*(.+?)\*\*', dotAll: true);
     var cursor = 0;
     for (final match in pattern.allMatches(content)) {
       if (match.start > cursor) {
