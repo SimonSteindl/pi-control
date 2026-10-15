@@ -64,7 +64,7 @@ def inside_workspace(relative_path: str) -> Path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sicherer Pi-Control-PC-Helfer (Windows/Linux/macOS)")
-    parser.add_argument("action", choices=["info", "status", "diff", "tests", "read", "open", "url"])
+    parser.add_argument("action", choices=["info", "status", "diff", "tests", "read", "open", "url", "serve"])
     parser.add_argument("target", nargs="?", help="Relativer Dateipfad, Programmname oder URL")
     parser.add_argument("--workspace", help="Pi-Control-Projektordner überschreiben")
     parsed = parser.parse_args()
@@ -77,6 +77,12 @@ def main() -> int:
         print(f"Projektordner existiert nicht: {WORKSPACE}", file=sys.stderr)
         return 2
 
+    if parsed.action == "serve":
+        api_file = WORKSPACE / "pc-agent" / "local_api.py"
+        if not api_file.is_file():
+            print("Lokale API-Datei fehlt.", file=sys.stderr)
+            return 2
+        return run([sys.executable, str(api_file), "--workspace", str(WORKSPACE)], timeout=86400)
     if parsed.action == "info":
         print(f"System: {platform.system()} {platform.release()}")
         print(f"Python: {platform.python_version()}")
