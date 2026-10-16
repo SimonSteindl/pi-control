@@ -2,68 +2,287 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="google-site-verification" content="9x7zVg3rwIavWXx9JqneOarRnjdEPBQREiCuAUY8IeA" />
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Pi-Control is a Raspberry Pi monitoring and management project with system temperature, uptime, memory, storage, network status and a mobile app. Explore features, source code and releases.">
+  <meta name="google-site-verification" content="9x7zVg3rwIavWXx9JqneOarRnjdEPBQREiCuAUY8IeA">
+  <meta name="description" content="Pi-Control is an open-source Raspberry Pi dashboard for system health, storage, files, backups, aviation weather and AI-assisted administration. Self-host your own control center.">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <meta name="theme-color" content="#0b0d12">
   <link rel="canonical" href="https://pi-control-public.steindlsimon12.workers.dev/">
-  <meta name="robots" content="index, follow">
-  <meta name="theme-color" content="#101827">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230b0d12'/%3E%3Cpath d='M17 18h30v8H25v8h18v8H25v7h-8z' fill='%23ff7900'/%3E%3Ccircle cx='46' cy='45' r='5' fill='%23ffb36b'/%3E%3C/svg%3E">
   <meta property="og:type" content="website">
-  <meta property="og:title" content="Pi-Control — Raspberry Pi Monitoring">
-  <meta property="og:description" content="Monitor Raspberry Pi temperature, uptime, memory, storage and network status with Pi-Control. Explore the app, web interface and open-source code.">
+  <meta property="og:title" content="Pi-Control — Your Raspberry Pi, at a glance">
+  <meta property="og:description" content="An open-source, self-hosted control center for Raspberry Pi monitoring, files, backups and tools.">
   <meta property="og:site_name" content="Pi-Control">
   <meta property="og:url" content="https://pi-control-public.steindlsimon12.workers.dev/">
-  <title>Pi-Control — Raspberry Pi Monitoring &amp; Management</title>
+  <meta name="twitter:card" content="summary">
+  <title>Pi-Control — Raspberry Pi dashboard, files and tools</title>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Pi-Control",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Android, Linux server, Web",
+    "description": "Open-source self-hosted Raspberry Pi monitoring and management dashboard.",
+    "codeRepository": "https://github.com/SimonSteindl/pi-control",
+    "downloadUrl": "https://github.com/SimonSteindl/pi-control/releases"
+  }
+  </script>
   <style>
-    :root { color-scheme: dark; --bg: #101827; --panel: #1b293c; --text: #edf2f7; --muted: #c5d0df; --accent: #73e0b2; --border: #34445a; }
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
-    main { width: min(900px, 100%); margin: auto; padding: 64px 24px 40px; }
-    .tag { color: var(--accent); font-size: .82rem; font-weight: 800; letter-spacing: .16em; }
-    h1 { font-size: clamp(2.6rem, 8vw, 4.8rem); line-height: 1.05; letter-spacing: -.04em; margin: 16px 0; }
-    h2 { margin-top: 0; font-size: 1.45rem; }
-    .intro { max-width: 680px; font-size: 1.18rem; color: var(--muted); }
-    .panel { margin-top: 32px; padding: 26px; border: 1px solid var(--border); border-radius: 18px; background: var(--panel); }
-    ul { padding-left: 1.3rem; color: var(--muted); }
-    li { padding: 3px 0; }
-    .links { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 22px; }
-    .links a { display: inline-block; padding: 11px 15px; border: 1px solid var(--border); border-radius: 10px; color: var(--accent); text-decoration: none; font-weight: 700; }
-    .links a:hover, a:focus-visible { border-color: var(--accent); text-decoration: underline; }
-    footer { margin-top: 54px; border-top: 1px solid var(--border); padding-top: 20px; color: #a7b4c5; font-size: .9rem; }
-    footer a { color: var(--accent); }
+    :root {
+      color-scheme: dark;
+      --bg: #0b0d12;
+      --surface: #11151d;
+      --surface-raised: #171d27;
+      --text: #f6f7f9;
+      --muted: #a9b2c1;
+      --soft: #727e90;
+      --accent: #ff7900;
+      --accent-light: #ffb36b;
+      --line: rgba(255,255,255,.10);
+      --green: #6ee7a8;
+      --radius: 22px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 92px; }
+    body { margin: 0; background: var(--bg); color: var(--text); line-height: 1.65; }
+    a { color: inherit; }
+    a:focus-visible, button:focus-visible { outline: 3px solid var(--accent-light); outline-offset: 4px; }
+    .shell { width: min(1160px, calc(100% - 40px)); margin-inline: auto; }
+    .skip { position: absolute; top: -80px; left: 12px; z-index: 20; padding: 10px 14px; background: var(--accent); color: #111; border-radius: 8px; }
+    .skip:focus { top: 12px; }
+    .topbar { position: sticky; top: 0; z-index: 10; border-bottom: 1px solid var(--line); background: rgba(11,13,18,.86); backdrop-filter: blur(18px); }
+    .nav { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+    .brand { display: inline-flex; align-items: center; gap: 11px; text-decoration: none; font-size: 1.1rem; font-weight: 850; letter-spacing: -.03em; }
+    .brand-mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; background: var(--accent); color: #101116; font-weight: 950; box-shadow: 0 8px 26px rgba(255,121,0,.18); }
+    .nav-links { display: flex; align-items: center; gap: 25px; }
+    .nav-links a { color: var(--muted); text-decoration: none; font-size: .93rem; font-weight: 650; }
+    .nav-links a:hover { color: var(--text); }
+    .button { display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-height: 48px; padding: 12px 18px; border: 1px solid var(--line); border-radius: 13px; text-decoration: none; font-weight: 800; transition: transform .18s ease, border-color .18s ease, background .18s ease; }
+    .button:hover { transform: translateY(-2px); border-color: rgba(255,121,0,.65); }
+    .button.primary { color: #17110b; background: var(--accent); border-color: var(--accent); }
+    .button.secondary { background: rgba(255,255,255,.035); }
+    .hero { display: grid; grid-template-columns: minmax(0,1.05fr) minmax(320px,.95fr); align-items: center; gap: clamp(38px,7vw,84px); padding-block: clamp(70px,10vw,124px) 88px; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 9px; color: var(--accent-light); font-size: .78rem; letter-spacing: .16em; text-transform: uppercase; font-weight: 900; }
+    .eyebrow::before { content: ""; width: 24px; height: 2px; background: var(--accent); }
+    h1 { max-width: 720px; margin: 18px 0; font-size: clamp(3rem,7vw,5.6rem); line-height: .99; letter-spacing: -.075em; }
+    .gradient { color: var(--accent); }
+    .lead { max-width: 620px; color: var(--muted); font-size: clamp(1.08rem,2vw,1.25rem); line-height: 1.75; }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+    .proof { display: flex; flex-wrap: wrap; gap: 15px 22px; margin-top: 27px; color: var(--soft); font-size: .88rem; }
+    .proof span { display: inline-flex; align-items: center; gap: 8px; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+    .preview-wrap { position: relative; }
+    .glow { position: absolute; inset: 10% -8% -5%; background: radial-gradient(ellipse,rgba(255,121,0,.20),transparent 68%); filter: blur(18px); pointer-events: none; }
+    .preview { position: relative; overflow: hidden; padding: 18px; border: 1px solid rgba(255,255,255,.13); border-radius: 26px; background: linear-gradient(145deg,#171d27,#0f1219); box-shadow: 0 32px 100px rgba(0,0,0,.45); transform: perspective(1000px) rotateY(-4deg) rotateX(2deg); }
+    .preview-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 3px 2px 18px; }
+    .preview-title { font-weight: 850; }
+    .status { display: inline-flex; align-items: center; gap: 7px; color: var(--green); font-size: .76rem; font-weight: 800; }
+    .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 14px currentColor; }
+    .preview-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 11px; }
+    .metric { min-width: 0; padding: 15px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.025); }
+    .metric-label { color: var(--muted); font-size: .78rem; }
+    .metric-value { margin-top: 4px; font-size: clamp(1.35rem,3vw,2rem); font-weight: 900; letter-spacing: -.05em; }
+    .metric-note { color: var(--soft); font-size: .73rem; }
+    .chart { grid-column: 1 / -1; padding: 16px; border: 1px solid var(--line); border-radius: 16px; }
+    .chart-head { display: flex; justify-content: space-between; gap: 12px; font-size: .8rem; }
+    .chart-head span:last-child { color: var(--accent-light); }
+    .bars { display: flex; align-items: end; gap: 8px; height: 86px; margin-top: 16px; }
+    .bars i { flex: 1; min-width: 0; border-radius: 5px 5px 2px 2px; background: linear-gradient(180deg,var(--accent-light),var(--accent)); opacity: .9; }
+    .preview-foot { display: flex; align-items: center; gap: 9px; margin-top: 12px; padding: 12px; border-radius: 13px; background: rgba(110,231,168,.07); color: #c4f7d9; font-size: .78rem; }
+    .section { padding-block: 82px; border-top: 1px solid var(--line); }
+    .section-head { max-width: 700px; margin-bottom: 32px; }
+    .section h2 { margin: 12px 0; font-size: clamp(2rem,4vw,3.25rem); line-height: 1.1; letter-spacing: -.055em; }
+    .section-head p { color: var(--muted); font-size: 1.05rem; }
+    .cards { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 15px; }
+    .card { padding: 24px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+    .icon { display: grid; place-items: center; width: 44px; height: 44px; margin-bottom: 20px; border: 1px solid rgba(255,121,0,.28); border-radius: 14px; background: rgba(255,121,0,.09); color: var(--accent-light); font-size: 1.25rem; font-weight: 900; }
+    .card h3 { margin: 0 0 9px; font-size: 1.08rem; }
+    .card p { margin: 0; color: var(--muted); font-size: .94rem; }
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; align-items: stretch; }
+    .feature-panel { padding: clamp(25px,4vw,40px); border: 1px solid var(--line); border-radius: 26px; background: var(--surface); }
+    .feature-panel h3 { margin: 14px 0; font-size: 1.55rem; letter-spacing: -.035em; }
+    .feature-panel p { color: var(--muted); }
+    .checklist { display: grid; gap: 12px; margin: 20px 0 0; padding: 0; list-style: none; }
+    .checklist li { display: flex; align-items: flex-start; gap: 11px; color: var(--muted); }
+    .check { color: var(--green); font-weight: 900; }
+    .steps { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 15px; counter-reset: step; }
+    .step { padding: 24px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); counter-increment: step; }
+    .step::before { content: "0" counter(step); color: var(--accent); font-size: .82rem; font-weight: 950; letter-spacing: .1em; }
+    .step h3 { margin: 15px 0 8px; }
+    .step p { margin: 0; color: var(--muted); font-size: .94rem; }
+    .cta { display: flex; align-items: center; justify-content: space-between; gap: 30px; padding: clamp(28px,5vw,52px); border: 1px solid rgba(255,121,0,.28); border-radius: 28px; background: radial-gradient(circle at 100% 0,rgba(255,121,0,.15),transparent 45%),var(--surface); }
+    .cta h2 { max-width: 650px; margin: 0 0 10px; font-size: clamp(1.9rem,4vw,3rem); letter-spacing: -.055em; }
+    .cta p { max-width: 620px; margin: 0; color: var(--muted); }
+    .faq { display: grid; gap: 10px; }
+    details { padding: 18px 20px; border: 1px solid var(--line); border-radius: 15px; background: var(--surface); }
+    summary { cursor: pointer; font-weight: 800; }
+    details p { margin-bottom: 0; color: var(--muted); }
+    footer { padding: 30px 0 42px; border-top: 1px solid var(--line); }
+    .footer-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 18px; color: var(--soft); font-size: .88rem; }
+    .footer-links { display: flex; flex-wrap: wrap; gap: 18px; }
+    .footer-links a { color: var(--muted); text-decoration: none; }
+    .footer-links a:hover { color: var(--accent-light); }
+    @media (max-width: 850px) {
+      .hero { grid-template-columns: 1fr; padding-top: 68px; }
+      .preview { max-width: 590px; transform: none; }
+      .cards { grid-template-columns: repeat(2,minmax(0,1fr)); }
+      .steps { grid-template-columns: 1fr; }
+      .cta { align-items: flex-start; flex-direction: column; }
+    }
+    @media (max-width: 600px) {
+      .shell { width: min(100% - 28px,1160px); }
+      .nav { min-height: 66px; }
+      .nav-links { gap: 12px; }
+      .nav-links a:not(.button) { display: none; }
+      .nav-links .button { min-height: 40px; padding: 8px 12px; font-size: .86rem; }
+      .hero { gap: 38px; padding-bottom: 58px; }
+      h1 { font-size: clamp(2.8rem,15vw,4.3rem); }
+      .cards,.split { grid-template-columns: 1fr; }
+      .section { padding-block: 60px; }
+      .card { padding: 21px; }
+      .preview { padding: 12px; border-radius: 20px; }
+      .metric { padding: 12px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
   </style>
 </head>
 <body>
-  <main>
-    <div class="tag">RASPBERRY PI PROJECT</div>
-    <h1>Pi-Control</h1>
-    <p class="intro">A Raspberry Pi monitoring and management project, bringing system information and server controls together through a dedicated app and web interface.</p>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="topbar">
+    <nav class="nav shell" aria-label="Main navigation">
+      <a class="brand" href="#top" aria-label="Pi-Control home"><span class="brand-mark" aria-hidden="true">P</span><span>Pi-Control</span></a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#how-it-works">How it works</a>
+        <a href="#faq">FAQ</a>
+        <a class="button secondary" href="https://github.com/SimonSteindl/pi-control">View source ↗</a>
+      </div>
+    </nav>
+  </header>
 
-    <section class="panel" aria-labelledby="features">
-      <h2 id="features">Project features</h2>
-      <ul>
-        <li>System information, including CPU temperature and uptime</li>
-        <li>Memory and storage monitoring</li>
-        <li>Network information and status checks</li>
-        <li>CPU benchmarking and history</li>
-        <li>File management through the project interface</li>
-        <li>A mobile app connected to a Python/Flask server</li>
-      </ul>
+  <main id="main" class="shell">
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div>
+        <div class="eyebrow">Open source · Self-hosted</div>
+        <h1 id="hero-title">Your Pi.<br>Your <span class="gradient">control center.</span></h1>
+        <p class="lead">Monitor your Raspberry Pi, manage files and backups, check aviation weather and explore AI-assisted tools — from one focused dashboard you run yourself.</p>
+        <div class="actions">
+          <a class="button primary" href="https://github.com/SimonSteindl/pi-control/releases">Get the app &amp; releases <span aria-hidden="true">↗</span></a>
+          <a class="button secondary" href="https://github.com/SimonSteindl/pi-control">Explore the source <span aria-hidden="true">↗</span></a>
+        </div>
+        <div class="proof" aria-label="Project principles">
+          <span><i class="dot" aria-hidden="true"></i> Self-hosted by design</span>
+          <span>⌘ Open source</span>
+          <span>◈ Android + web</span>
+        </div>
+      </div>
+      <div class="preview-wrap" aria-label="Illustration of a Pi-Control dashboard">
+        <div class="glow" aria-hidden="true"></div>
+        <div class="preview">
+          <div class="preview-head"><span class="preview-title">System overview</span><span class="status">Connected</span></div>
+          <div class="preview-grid">
+            <div class="metric"><div class="metric-label">CPU temperature</div><div class="metric-value">42.3°</div><div class="metric-note">Illustrative preview</div></div>
+            <div class="metric"><div class="metric-label">Uptime</div><div class="metric-value">12d 04h</div><div class="metric-note">Illustrative preview</div></div>
+            <div class="metric"><div class="metric-label">Memory</div><div class="metric-value">61%</div><div class="metric-note">Usage snapshot</div></div>
+            <div class="metric"><div class="metric-label">Storage</div><div class="metric-value">48%</div><div class="metric-note">Usage snapshot</div></div>
+            <div class="chart">
+              <div class="chart-head"><span>Resource history</span><span>Example data</span></div>
+              <div class="bars" aria-hidden="true"><i style="height:36%"></i><i style="height:54%"></i><i style="height:43%"></i><i style="height:70%"></i><i style="height:58%"></i><i style="height:84%"></i><i style="height:64%"></i><i style="height:74%"></i><i style="height:48%"></i><i style="height:60%"></i><i style="height:78%"></i><i style="height:55%"></i></div>
+            </div>
+          </div>
+          <div class="preview-foot"><span aria-hidden="true">✓</span> Example UI only — not live device telemetry.</div>
+        </div>
+      </div>
     </section>
 
-    <section class="panel" aria-labelledby="explore">
-      <h2 id="explore">Explore the project</h2>
-      <p>Pi-Control is actively being developed. Visit the repository for the current source code, project documentation and available downloads.</p>
-      <nav class="links" aria-label="Project links">
-        <a href="https://github.com/SimonSteindl/pi-control">Source code on GitHub</a>
-        <a href="https://github.com/SimonSteindl/pi-control/releases">Releases &amp; downloads</a>
-      </nav>
+    <section class="section" id="features" aria-labelledby="features-title">
+      <div class="section-head">
+        <div class="eyebrow">Built for your own hardware</div>
+        <h2 id="features-title">The tools you need.<br>Nothing in the way.</h2>
+        <p>A practical home for the everyday jobs of a small server, with a mobile app and a browser interface.</p>
+      </div>
+      <div class="cards">
+        <article class="card"><div class="icon" aria-hidden="true">⌁</div><h3>System monitoring</h3><p>Keep an eye on temperature, uptime, memory, storage, network state and resource history.</p></article>
+        <article class="card"><div class="icon" aria-hidden="true">▤</div><h3>File management</h3><p>Browse your connected storage, find files, preview supported media and manage permitted uploads.</p></article>
+        <article class="card"><div class="icon" aria-hidden="true">↗</div><h3>Backups</h3><p>Use the available backup tools to move selected media and keep important files together.</p></article>
+        <article class="card"><div class="icon" aria-hidden="true">✈</div><h3>Aviation weather</h3><p>Look up METAR and TAF reports by ICAO airport code in the dedicated flight-weather view.</p></article>
+        <article class="card"><div class="icon" aria-hidden="true">✳</div><h3>AI assistant</h3><p>Chat with the configured local AI service where it is enabled. Capabilities depend on your server configuration.</p></article>
+        <article class="card"><div class="icon" aria-hidden="true">⌘</div><h3>One project, multiple screens</h3><p>Use the Android app or browser dashboard with account-based access and server-side permissions.</p></article>
+      </div>
     </section>
 
-    <footer>
-      <p>Pi-Control · Raspberry Pi monitoring and management</p>
-      <p><a href="https://github.com/SimonSteindl/pi-control">Project repository</a></p>
-    </footer>
+    <section class="section" aria-labelledby="principles-title">
+      <div class="split">
+        <div class="feature-panel">
+          <div class="eyebrow">You stay in charge</div>
+          <h3 id="principles-title">Self-hosted, not a mystery box.</h3>
+          <p>Pi-Control is designed to run on your own Raspberry Pi. The public website is only project information; it does not need access to your private dashboard or device.</p>
+          <ul class="checklist">
+            <li><span class="check" aria-hidden="true">✓</span><span>Source code and releases are published on GitHub.</span></li>
+            <li><span class="check" aria-hidden="true">✓</span><span>Private dashboard access is separate from this public site.</span></li>
+            <li><span class="check" aria-hidden="true">✓</span><span>Account permissions determine which server actions are available.</span></li>
+          </ul>
+        </div>
+        <div class="feature-panel">
+          <div class="eyebrow">Designed to grow</div>
+          <h3>Useful today. Extensible tomorrow.</h3>
+          <p>The project brings monitoring, file tools, backups and optional AI features together without pretending every deployment is identical.</p>
+          <ul class="checklist">
+            <li><span class="check" aria-hidden="true">✓</span><span>Python/Flask server and Flutter app source.</span></li>
+            <li><span class="check" aria-hidden="true">✓</span><span>Documented setup and release history.</span></li>
+            <li><span class="check" aria-hidden="true">✓</span><span>Features may require configuration or compatible hardware.</span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="how-it-works" aria-labelledby="how-title">
+      <div class="section-head">
+        <div class="eyebrow">Getting started</div>
+        <h2 id="how-title">From repository to your dashboard.</h2>
+        <p>Pi-Control is a self-hosted project. You operate the server and choose how you connect to it.</p>
+      </div>
+      <div class="steps">
+        <article class="step"><h3>Review the project</h3><p>Read the README, check requirements and review the source before installing.</p></article>
+        <article class="step"><h3>Set up your Pi</h3><p>Configure the server, storage and account permissions for your own environment.</p></article>
+        <article class="step"><h3>Connect your device</h3><p>Install a published app release or use the browser interface and add your server address.</p></article>
+      </div>
+    </section>
+
+    <section class="section" id="faq" aria-labelledby="faq-title">
+      <div class="section-head">
+        <div class="eyebrow">Quick answers</div>
+        <h2 id="faq-title">Before you get started.</h2>
+      </div>
+      <div class="faq">
+        <details><summary>Is Pi-Control a hosted cloud service?</summary><p>No. Pi-Control is a self-hosted project intended to run on your own server. This public page is a static project website and is separate from your private instance.</p></details>
+        <details><summary>Where can I download the app?</summary><p>Check the GitHub Releases page for published builds and release notes. Availability can change as development progresses.</p></details>
+        <details><summary>Does every feature work immediately?</summary><p>Some features depend on server configuration, account permissions, connected storage, network access or a configured AI service. Follow the project documentation for current requirements.</p></details>
+        <details><summary>How do I report a bug or request a feature?</summary><p>Open the GitHub repository and use its issue tracker. Include relevant logs, steps to reproduce and your app/server version, but never post passwords, tokens or private data.</p></details>
+      </div>
+    </section>
+
+    <section class="section" aria-label="Get started">
+      <div class="cta">
+        <div><h2>Your hardware. Your dashboard. Your rules.</h2><p>Explore the source, check the current release and help make Pi-Control better.</p></div>
+        <div class="actions">
+          <a class="button primary" href="https://github.com/SimonSteindl/pi-control/releases">View releases ↗</a>
+          <a class="button secondary" href="https://github.com/SimonSteindl/pi-control/issues">Report an issue ↗</a>
+        </div>
+      </div>
+    </section>
   </main>
+
+  <footer>
+    <div class="shell footer-row">
+      <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true">P</span><span>Pi-Control</span></a>
+      <span>Open-source Raspberry Pi tools · Built for self-hosting</span>
+      <div class="footer-links"><a href="https://github.com/SimonSteindl/pi-control">GitHub</a><a href="https://github.com/SimonSteindl/pi-control/releases">Releases</a><a href="https://github.com/SimonSteindl/pi-control/issues">Issues</a></div>
+    </div>
+  </footer>
 </body>
 </html>
