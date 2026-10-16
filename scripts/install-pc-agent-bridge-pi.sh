@@ -28,16 +28,17 @@ if ! systemctl cat "$SERVICE" >/dev/null 2>&1; then
   echo "systemd-Dienst $SERVICE wurde nicht gefunden." >&2
   exit 2
 fi
-python3 - "$REPO_ROOT/server/server.py" "$REPO_ROOT/server/pc_agent_bridge.py" <<'PY' || {
+if ! python3 - "$REPO_ROOT/server/server.py" "$REPO_ROOT/server/pc_agent_bridge.py" <<'PY'
 import ast
 import pathlib
 import sys
 for filename in sys.argv[1:]:
     ast.parse(pathlib.Path(filename).read_text(encoding="utf-8"), filename=filename)
 PY
+then
   echo "Python-Syntaxprüfung fehlgeschlagen; es wurde nichts geändert." >&2
   exit 2
-}
+fi
 
 echo "Dieses Skript erstellt ein systemd-Token und startet Pi-Control neu."
 echo "Der PC-Agent bleibt lokal; nur ausgehende HTTPS-Verbindungen werden verwendet."
