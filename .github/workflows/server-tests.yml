@@ -28,6 +28,7 @@ jobs:
         run: python -m pip install Flask Werkzeug
       - name: Check Python syntax
         run: python -m py_compile server/server.py server/pc_agent_bridge.py server/test_ai_memory.py server/test_pc_agent_bridge.py
-      - name: Run AI memory tests
-        run: python server/test_ai_memory.py
+      - name: Run AI memory and PC-Agent bridge tests
+        run: |
+          python server/test_ai_memory.py
           python server/test_pc_agent_bridge.py
