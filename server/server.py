@@ -2051,7 +2051,9 @@ def api_ai_chat():
         return jsonify({"ok": False, "error": "Bitte zuerst eine Frage eingeben."}), 400
 
     pc_agent_enabled = bool(
-        os.environ.get("PI_CONTROL_PC_AGENT_URL", "").strip()
+        g.auth_user
+        and bool(g.auth_user["is_admin"])
+        and os.environ.get("PI_CONTROL_PC_AGENT_URL", "").strip()
         and os.environ.get("PI_CONTROL_PC_AGENT_TOKEN", "").strip()
     )
     system_prompt = (
