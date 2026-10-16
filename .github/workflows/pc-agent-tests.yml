@@ -6,7 +6,7 @@ on:
       - 'pc-agent/**'
       - '.github/workflows/pc-agent-tests.yml'
   push:
-    branches: [main, feature/cross-platform-pc-agent]
+    branches: [main, feature/cross-platform-pc-agent, feature/pc-agent-bridge-mvp]
     paths:
       - 'pc-agent/**'
       - '.github/workflows/pc-agent-tests.yml'
@@ -33,3 +33,19 @@ jobs:
           python pc-agent/agent.py info
           python pc-agent/agent.py status
           python pc-agent/test_local_api.py
+
+  windows-script:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Validate PowerShell launcher syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/pc-agent/start-bridge.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
