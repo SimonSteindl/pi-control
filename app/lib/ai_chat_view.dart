@@ -55,13 +55,22 @@ class _AiChatViewState extends State<AiChatView> {
       if (raw == null || raw.isEmpty) return;
       final decoded = jsonDecode(raw);
       if (decoded is! List || !mounted) return;
+      final restored = decoded
+          .whereType<Map>()
+          .where((item) => item['role'] == 'user' || item['role'] == 'assistant')
+          .map((item) => <String, String>{
+                'role': item['role'].toString(),
+                'content': (item['content']?.toString() ?? '').length > 12000
+                    ? item['content'].toString().substring(0, 12000)
+                    : item['content']?.toString() ?? '',
+              })
+          .toList();
       setState(() {
         _messages
           ..clear()
-          ..addAll(decoded.whereType<Map>().map((item) => {
-            'role': '${item['role'] ?? 'assistant'}',
-            'content': '${item['content'] ?? ''}',
-          }));
+          ..addAll(restored.length > 60
+              ? restored.sublist(restored.length - 60)
+              : restored);
       });
       _scrollToBottom();
     } catch (_) {
@@ -69,10 +78,19 @@ class _AiChatViewState extends State<AiChatView> {
     }
   }
 
+  void _trimMessages() {
+    if (_messages.length > 60) {
+      _messages.removeRange(0, _messages.length - 60);
+    }
+  }
+
   Future<void> _saveChat() async {
     try {
       final preferences = await SharedPreferences.getInstance();
-      await preferences.setString(_chatStorageKey, jsonEncode(_messages));
+      final saved = _messages.length > 60
+          ? _messages.sublist(_messages.length - 60)
+          : _messages;
+      await preferences.setString(_chatStorageKey, jsonEncode(saved));
     } catch (_) {
       // Chat still works if local persistence is unavailable.
     }
@@ -121,6 +139,7 @@ class _AiChatViewState extends State<AiChatView> {
       _error = null;
       _busy = true;
       _messages.add({'role': 'user', 'content': text});
+      _trimMessages();
     });
     await _saveChat();
     _scrollToBottom();
@@ -142,7 +161,10 @@ class _AiChatViewState extends State<AiChatView> {
         throw ApiException(_en ? 'The AI returned an empty answer.' : 'Die KI hat keine Antwort geliefert.');
       }
       if (!mounted) return;
-      setState(() => _messages.add({'role': 'assistant', 'content': content.trim()}));
+      setState(() {
+        _messages.add({'role': 'assistant', 'content': content.trim()});
+        _trimMessages();
+      });
       await _saveChat();
       if (RegExp(r'^\s*(merk(?:e)?\s+dir|speicher|remember)', caseSensitive: false).hasMatch(text)) {
         await _loadMemories();
