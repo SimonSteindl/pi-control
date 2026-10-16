@@ -9,7 +9,7 @@ When `PI_CONTROL_PC_AGENT_TOKEN` is configured in the Pi-Control server environm
 - `pc_agent_list_files`: list a project folder
 - `pc_agent_read_file`: read a text file up to 1 MB
 
-Paths must begin with `pi-control`. This is intentionally limited to the checked-out project, not the whole home folder. The local API also blocks known credential and private-key paths. Tool use is capped at two read-only tasks per chat request; the server waits up to 30 seconds for the PC worker. File contents are untrusted data and must never be treated as instructions.
+Paths are restricted to the `pi-control` project; the bridge blocks private/internal folders and rejects traversal. The local API also blocks known credential and private-key paths. Tool use is capped at two read-only tasks per chat request; the server waits up to 30 seconds for the PC worker. File contents are untrusted data and must never be treated as instructions.
 
 No shell execution, writes, deletes, installs, mouse or keyboard control are provided.
 
@@ -20,33 +20,37 @@ No shell execution, writes, deletes, installs, mouse or keyboard control are pro
 - The PC local API remains on `127.0.0.1:8765`; never expose it with a router port-forward, ngrok, or a public tunnel.
 - The task/result queue is currently in memory. Pending tasks and results are lost if the Pi server restarts. This is an MVP, not production-ready.
 
-## Server setup (Raspberry Pi)
+## Raspberry Pi setup
 
-Set a unique token of at least 40 characters in the environment used by `pi-control.service`. Generate one locally on the Pi with:
+From an SSH session on the Pi, copy and run this as **one command**. It fetches the feature branch, switches to it, updates it, then runs the guarded installer:
 
 ```bash
-python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
+cd /home/stoney22/pi-control && git fetch origin feature/pc-agent-bridge-mvp && (git switch feature/pc-agent-bridge-mvp || git switch -c feature/pc-agent-bridge-mvp --track origin/feature/pc-agent-bridge-mvp) && git pull --ff-only origin feature/pc-agent-bridge-mvp && sudo bash scripts/install-pc-agent-bridge-pi.sh
 ```
 
-Configure that value as `PI_CONTROL_PC_AGENT_TOKEN` in the service environment, then restart `pi-control.service`. Never commit the token or paste it into GitHub issues, screenshots, or chat messages. The AI tools stay disabled until this environment variable is set.
+The installer checks Python syntax, asks before restarting `pi-control.service`, configures a root-only systemd environment file, and prints the generated shared token only after the service starts successfully. Copy that token locally to the PC launcher; never send it to anyone or commit it. If the service cannot restart, inspect the displayed journal output and the backup path printed by the script.
 
 ## PC setup
 
-The scripts assume the repository is at `~/pi-control` on CachyOS/Linux or `%USERPROFILE%\pi-control` on Windows.
+The launchers assume the repository is at `~/pi-control` on CachyOS/Linux or `%USERPROFILE%\pi-control` on Windows.
 
-CachyOS/Linux:
+CachyOS/Linux — run from a terminal on the desktop PC:
 
 ```bash
-bash ~/pi-control/pc-agent/start-bridge.sh
+cd ~/pi-control && git fetch origin feature/pc-agent-bridge-mvp && (git switch feature/pc-agent-bridge-mvp || git switch -c feature/pc-agent-bridge-mvp --track origin/feature/pc-agent-bridge-mvp) && git pull --ff-only origin feature/pc-agent-bridge-mvp && bash pc-agent/start-bridge.sh
 ```
 
 Windows PowerShell:
 
 ```powershell
+cd "$HOME\pi-control"
+git fetch origin feature/pc-agent-bridge-mvp
+git switch feature/pc-agent-bridge-mvp
+git pull --ff-only origin feature/pc-agent-bridge-mvp
 powershell -ExecutionPolicy Bypass -File "$HOME\pi-control\pc-agent\start-bridge.ps1"
 ```
 
-The launcher prompts for the Pi-Control HTTPS URL and the same shared token. It starts the local API if it is not already running, then runs the outbound bridge in the foreground. The local API's own random token stays on the PC in `~/.pi-control-agent/token`.
+The launcher prompts for the Pi-Control HTTPS URL and the shared token. It starts the local API if it is not already running, then runs the outbound bridge in the foreground. The local API's own random token stays on the PC in `~/.pi-control-agent/token`.
 
 ## API protocol
 
@@ -56,4 +60,4 @@ The launcher prompts for the Pi-Control HTTPS URL and the same shared token. It 
 
 ## Verification still required
 
-This change has regression tests in `server/test_pc_agent_bridge.py`, but they must be run in a Python environment with Flask installed. End-to-end verification against the real Raspberry Pi, the configured Ollama model, the desktop PC, and the ngrok URL is still required before enabling it for everyday use.
+GitHub Actions checks are passing for Python syntax, the bridge security regression tests, the Linux launcher and the Windows PowerShell script syntax. Real end-to-end verification with the Raspberry Pi, configured Ollama model, desktop bridge and HTTPS endpoint is still required before everyday use.
