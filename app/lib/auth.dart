@@ -78,11 +78,356 @@ class PiApiClient {
 
   void close() => _httpClient.close();
 
+  bool _isPrivateNetworkHost(String host) {
+    final normalized = host.toLowerCase().replaceAll('[', '').replaceAll(']', '');
+    if (normalized == 'localhost' ||
+        normalized.endsWith('.local') ||
+        normalized == '::1' ||
+        normalized.startsWith('fc') ||
+        normalized.startsWith('fd') ||
+        normalized.startsWith('fe80:')) {
+      return true;
+    }
+    final parts = normalized.split('.');
+    if (parts.length != 4) return false;
+    final octets = parts.map(int.tryParse).toList();
+    if (octets.any((value) => value == null || value < 0 || value > 255)) {
+      return false;
+    }
+    final a = octets[0]!;
+    final b = octets[1]!;
+    return a == 10 ||
+        a == 127 ||
+        (a == 192 && b == 168) ||
+        (a == 172 && b >= 16 && b <= 31) ||
+        (a == 169 && b == 254) ||
+        (a == 100 && b >= 64 && b <= 127);
+  }
+
+  String _normalizeServerAddress(String address) {
+    var value = address.trim();
+    if (value.isEmpty) throw const ApiException('Serveradresse fehlt.');
+    if (!value.startsWith('http://') && !value.startsWith('https://')) {
+      value = 'https://$value';
+    }
+    value = value.replaceAll(RegExp(r'/+
+    if (!candidates.contains(value)) candidates.add(value);
+    activeBase = value;
+    token = null;
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setStringList(
+      'pi_control_servers',
+      candidates
+          .where(
+            (base) =>
+                !base.contains('192.168.0.123') &&
+                !base.contains('100.73.19.27') &&
+                !(kIsWeb && base == '${Uri.base.origin}/api'),
+          )
+          .toList(),
+    );
+    await preferences.setString('pi_control_active_server', value);
+  }
+
+  Future<void> selectServer(String base) async {
+    if (!candidates.contains(base)) return;
+    activeBase = base;
+    token = null;
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString('pi_control_active_server', base);
+  }
+
+  String get connectionName {
+    if (kIsWeb && activeBase == '${Uri.base.origin}/api') return 'Website';
+    if (activeBase.contains('100.73.19.27')) return 'Tailscale';
+    if (activeBase == publicServerBase) return 'Internet (HTTPS)';
+    if (activeBase.contains('.ngrok-free.dev')) return 'Internet (HTTPS)';
+    return 'LAN';
+  }
+
+  Map<String, String> _headers(Map<String, String>? headers) {
+    return {
+      'ngrok-skip-browser-warning': '1',
+      if (token != null) 'Authorization': 'Bearer $token',
+      ...?headers,
+    };
+  }
+
+  Future<http.Response> _request(
+    String method,
+    String path, {
+    Map<String, String>? headers,
+    Object? body,
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    // Never replay login credentials, mutations, or an authenticated request
+    // against another server. A fallback server could be a different device,
+    // and the bearer token belongs only to the explicitly selected origin.
+    // Only unauthenticated GET requests may probe the configured candidates.
+    final orderedBases = token == null && method == 'GET'
+        ? <String>[
+            activeBase,
+            ...candidates.where((base) => base != activeBase),
+          ]
+        : <String>[activeBase];
+    Object? lastError;
+
+    for (final base in orderedBases) {
+      try {
+        final uri = Uri.parse('$base/$path');
+        final mergedHeaders = _headers(headers);
+        late final http.Response response;
+
+        if (method == 'GET') {
+          response = await _httpClient
+              .get(uri, headers: mergedHeaders)
+              .timeout(timeout);
+        } else if (method == 'POST') {
+          response = await _httpClient
+              .post(uri, headers: mergedHeaders, body: body)
+              .timeout(timeout);
+        } else if (method == 'PATCH') {
+          response = await _httpClient
+              .patch(uri, headers: mergedHeaders, body: body)
+              .timeout(timeout);
+        } else if (method == 'DELETE') {
+          response = await _httpClient
+              .delete(uri, headers: mergedHeaders, body: body)
+              .timeout(timeout);
+        } else {
+          throw UnsupportedError('Unbekannte HTTP-Methode: $method');
+        }
+
+        activeBase = base;
+        return response;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    throw ApiException('Raspberry Pi nicht erreichbar: $lastError');
+  }
+
+  Future<http.Response> get(
+    String path, {
+    Map<String, String>? headers,
+    Duration timeout = const Duration(seconds: 5),
+  }) {
+    return _request('GET', path, headers: headers, timeout: timeout);
+  }
+
+  Future<http.Response> post(
+    String path, {
+    Map<String, String>? headers,
+    Object? body,
+    Duration timeout = const Duration(seconds: 10),
+  }) {
+    return _request(
+      'POST',
+      path,
+      headers: headers,
+      body: body,
+      timeout: timeout,
+    );
+  }
+
+  Future<http.Response> patch(
+    String path, {
+    Map<String, String>? headers,
+    Object? body,
+    Duration timeout = const Duration(seconds: 10),
+  }) {
+    return _request(
+      'PATCH',
+      path,
+      headers: headers,
+      body: body,
+      timeout: timeout,
+    );
+  }
+
+  Future<http.Response> delete(
+    String path, {
+    Map<String, String>? headers,
+    Object? body,
+    Duration timeout = const Duration(seconds: 10),
+  }) {
+    return _request(
+      'DELETE',
+      path,
+      headers: headers,
+      body: body,
+      timeout: timeout,
+    );
+  }
+
+  Future<http.StreamedResponse> send(
+    http.BaseRequest request, {
+    Duration timeout = const Duration(minutes: 10),
+  }) {
+    request.headers.putIfAbsent('ngrok-skip-browser-warning', () => '1');
+    final sessionToken = token;
+    if (sessionToken != null) {
+      request.headers.putIfAbsent(
+        'Authorization',
+        () => 'Bearer $sessionToken',
+      );
+    }
+    return _httpClient.send(request).timeout(timeout);
+  }
+
+  Map<String, dynamic> decodeObject(http.Response response) {
+    try {
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    } catch (_) {
+      // Der HTTP-Status wird als Rückfall verwendet.
+    }
+    return <String, dynamic>{};
+  }
+
+  ApiException responseException(http.Response response) {
+    final decoded = decodeObject(response);
+    return ApiException(
+      decoded['error']?.toString() ?? 'HTTP ${response.statusCode}',
+      statusCode: response.statusCode,
+      code: decoded['code']?.toString(),
+    );
+  }
+
+  Future<AuthSession> login(
+    String username,
+    String password, {
+    required bool rememberMe,
+  }) async {
+    token = null;
+    final response = await post(
+      'auth/login',
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'username': username,
+        'password': password,
+        'remember_me': rememberMe,
+        'cookie_only': kIsWeb,
+        'device_name': kIsWeb
+            ? 'Webbrowser'
+            : switch (defaultTargetPlatform) {
+                TargetPlatform.android => 'Android-Gerät',
+                TargetPlatform.iOS => 'iPhone oder iPad',
+                TargetPlatform.windows => 'Windows-PC',
+                TargetPlatform.macOS => 'Mac',
+                TargetPlatform.linux => 'Linux-Gerät',
+                TargetPlatform.fuchsia => 'Mobilgerät',
+              },
+      }),
+    );
+
+    if (response.statusCode != 200) throw responseException(response);
+
+    final decoded = decodeObject(response);
+    final newToken = decoded['token']?.toString();
+    final user = decoded['user'];
+    if (user is! Map || (!kIsWeb && newToken == null)) {
+      throw const ApiException('Ungültige Login-Antwort.');
+    }
+
+    final sessionToken = kIsWeb ? '' : newToken!;
+    token = sessionToken.isEmpty ? null : sessionToken;
+    if (!kIsWeb) {
+      try {
+        if (rememberMe) {
+          await _secureStorage.write(
+            key: _sessionTokenKey,
+            value: sessionToken,
+          );
+        } else {
+          await _secureStorage.delete(key: _sessionTokenKey);
+        }
+      } catch (_) {
+        // Der aktive Login funktioniert auch bei gesperrtem Gerätespeicher.
+      }
+    }
+    return AuthSession.fromJson(sessionToken, user);
+  }
+
+  Future<AuthSession?> restoreSession() async {
+    if (kIsWeb) {
+      token = null;
+    } else {
+      try {
+        token = await _secureStorage.read(key: _sessionTokenKey);
+      } catch (_) {
+        token = null;
+      }
+      if (token == null || token!.isEmpty) return null;
+    }
+
+    final response = await get('auth/me', timeout: const Duration(seconds: 8));
+
+    if (response.statusCode == 401) {
+      token = null;
+      if (!kIsWeb) {
+        try {
+          await _secureStorage.delete(key: _sessionTokenKey);
+        } catch (_) {
+          // Ein ungültiger Token darf den normalen Login nicht blockieren.
+        }
+      }
+      return null;
+    }
+    if (response.statusCode != 200) throw responseException(response);
+
+    final user = decodeObject(response)['user'];
+    if (user is! Map) throw const ApiException('Ungültige Sitzungsantwort.');
+    return AuthSession.fromJson(token ?? '', user);
+  }
+
+  Future<void> logout() async {
+    try {
+      await post('auth/logout');
+    } finally {
+      token = null;
+      if (!kIsWeb) {
+        try {
+          await _secureStorage.delete(key: _sessionTokenKey);
+        } catch (_) {
+          // Die Server-Sitzung wurde trotzdem beendet.
+        }
+      }
+    }
+  }
+}
+), '');
+    if (!value.endsWith('/api')) value = '$value/api';
+    final uri = Uri.tryParse(value);
+    if (uri == null ||
+        !uri.hasAuthority ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment ||
+        uri.pathSegments.contains('..')) {
+      throw const ApiException('Ungültige Serveradresse.');
+    }
+    if (uri.scheme != 'https' &&
+        !(uri.scheme == 'http' && _isPrivateNetworkHost(uri.host))) {
+      throw const ApiException(
+        'Für externe Server ist HTTPS erforderlich. HTTP ist nur im lokalen oder privaten Netzwerk erlaubt.',
+      );
+    }
+    return value;
+  }
+
   Future<void> initialize() async {
     final preferences = await SharedPreferences.getInstance();
     final saved = preferences.getStringList('pi_control_servers') ?? const [];
-    for (final base in saved) {
-      if (!candidates.contains(base)) candidates.add(base);
+    for (final storedBase in saved) {
+      try {
+        final base = _normalizeServerAddress(storedBase);
+        if (!candidates.contains(base)) candidates.add(base);
+      } on ApiException {
+        // Ignore old or unsafe saved addresses instead of using them implicitly.
+      }
     }
     final preferred = preferences.getString('pi_control_active_server');
     if (preferred != null && candidates.contains(preferred)) {
@@ -91,14 +436,7 @@ class PiApiClient {
   }
 
   Future<void> addServer(String address) async {
-    var value = address.trim();
-    if (!value.startsWith('http://') && !value.startsWith('https://')) {
-      value = 'https://$value';
-    }
-    value = value.replaceAll(RegExp(r'/+$'), '');
-    if (!value.endsWith('/api')) value = '$value/api';
-    final uri = Uri.parse(value);
-    if (!uri.hasAuthority) throw const ApiException('Ungültige Serveradresse.');
+    final value = _normalizeServerAddress(address);
     if (!candidates.contains(value)) candidates.add(value);
     activeBase = value;
     token = null;
