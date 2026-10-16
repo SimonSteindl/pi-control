@@ -2056,7 +2056,18 @@ def api_ai_chat():
                     tool_result = {"ok": False, "error": "Dieses Werkzeug ist nicht freigegeben."}
                 else:
                     try:
-                        task_id = enqueue_pc_agent_task(action, arguments.get("path", ""))
+                        requested_path = arguments.get("path", "")
+                        if (
+                            isinstance(requested_path, str)
+                            and requested_path
+                            and not requested_path.startswith(("/", "\\\\"))
+                            and "\\\\" not in requested_path
+                            and ":" not in requested_path
+                            and not requested_path.startswith("pi-control/")
+                            and requested_path != "pi-control"
+                        ):
+                            requested_path = "pi-control/" + requested_path
+                        task_id = enqueue_pc_agent_task(action, requested_path)
                         task_result = wait_for_pc_agent_result(task_id, timeout=30)
                         if task_result is None:
                             tool_result = {
@@ -5054,7 +5065,7 @@ def api_cpu_benchmark():
         benchmark_lock.release()
 
 
-register_pc_agent_bridge(app, enqueue_auth=authentication_required())
+register_pc_agent_bridge(app, enqueue_auth=authentication_required(admin_only=True))
 
 if __name__ == "__main__":
     BASE_DIR.mkdir(parents=True, exist_ok=True)
