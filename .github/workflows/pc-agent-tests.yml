@@ -4,9 +4,10 @@ on:
   pull_request:
     paths:
       - 'pc-agent/**'
+      - 'scripts/install-pc-agent-bridge-pi.sh'
       - '.github/workflows/pc-agent-tests.yml'
   push:
-    branches: [main, feature/cross-platform-pc-agent]
+    branches: [main, feature/cross-platform-pc-agent, feature/pc-agent-bridge-mvp]
     paths:
       - 'pc-agent/**'
       - '.github/workflows/pc-agent-tests.yml'
@@ -24,10 +25,28 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Check Python syntax
-        run: python -m py_compile pc-agent/agent.py pc-agent/local_api.py pc-agent/test_local_api.py
+      - name: Check Python and shell syntax
+        run: |
+          python -m py_compile pc-agent/agent.py pc-agent/local_api.py pc-agent/bridge_client.py pc-agent/test_local_api.py
+          bash -n pc-agent/start-bridge.sh scripts/install-pc-agent-bridge-pi.sh
       - name: Smoke test
         run: |
           python pc-agent/agent.py info
           python pc-agent/agent.py status
           python pc-agent/test_local_api.py
+
+  windows-script:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Validate PowerShell launcher syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/pc-agent/start-bridge.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
