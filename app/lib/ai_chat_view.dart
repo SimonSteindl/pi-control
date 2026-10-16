@@ -224,14 +224,13 @@ class _AiChatViewState extends State<AiChatView> {
       if (response.statusCode != 200 || data['ok'] != true) {
         throw ApiException('${data['error'] ?? (_en ? 'PC action failed.' : 'PC-Aktion fehlgeschlagen.')}');
       }
-      var result = data['output']?.toString();
-      if (result == null || result.trim().isEmpty) {
-        result = const JsonEncoder.withIndent('  ').convert(data);
-      }
+      final result = (data['output']?.toString().trim().isNotEmpty ?? false)
+          ? data['output'].toString()
+          : JsonEncoder.withIndent('  ').convert(data);
       if (!mounted) return;
       setState(() {
         _actionRequests.remove(index);
-        _actionResults[index] = result!.length > 5000 ? '${result.substring(0, 5000)}…' : result;
+        _actionResults[index] = result.length > 5000 ? '${result.substring(0, 5000)}…' : result;
       });
     } catch (error) {
       if (mounted) {
