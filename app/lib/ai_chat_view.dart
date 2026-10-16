@@ -166,7 +166,7 @@ class _AiChatViewState extends State<AiChatView> {
   }
 
   String _actionTitle(Map<String, dynamic> action) {
-    final type = '\${action['action'] ?? ''}';
+    final type = '${action['action'] ?? ''}';
     if (_en) {
       switch (type) {
         case 'write_file': return 'Write or replace a file';
@@ -186,19 +186,19 @@ class _AiChatViewState extends State<AiChatView> {
   }
 
   String _actionDetails(Map<String, dynamic> action) {
-    final type = '\${action['action'] ?? ''}';
+    final type = '${action['action'] ?? ''}';
     if (type == 'run_command') {
       final command = action['command'];
-      return command is List ? command.map((part) => '\$part').join(' ') : '\$command';
+      return command is List ? command.map((part) => '$part').join(' ') : '$command';
     }
     if (type == 'write_file') {
-      final content = '\${action['content'] ?? ''}';
-      final preview = content.length > 1200 ? '\${content.substring(0, 1200)}…' : content;
-      return 'Pfad: \${action['path'] ?? ''}\\n\\nInhalt:\\n\$preview';
+      final content = '${action['content'] ?? ''}';
+      final preview = content.length > 1200 ? '${content.substring(0, 1200)}…' : content;
+      return 'Pfad: ${action['path'] ?? ''}\n\nInhalt:\n$preview';
     }
-    if (type == 'delete_file') return 'Pfad: \${action['path'] ?? ''}\\n\\nDer Eintrag wird in den Agent-Papierkorb verschoben, nicht sofort endgültig gelöscht.';
-    if (type == 'open') return 'Programm: \${action['app'] ?? ''}';
-    return '\${action['path'] ?? ''}';
+    if (type == 'delete_file') return 'Pfad: ${action['path'] ?? ''}\n\nDer Eintrag wird in den Agent-Papierkorb verschoben, nicht sofort endgültig gelöscht.';
+    if (type == 'open') return 'Programm: ${action['app'] ?? ''}';
+    return '${action['path'] ?? ''}';
   }
 
   Future<void> _rejectAction(int index) async {
@@ -223,7 +223,7 @@ class _AiChatViewState extends State<AiChatView> {
       );
       final data = widget.client.decodeObject(response);
       if (response.statusCode != 200 || data['ok'] != true) {
-        throw ApiException('\${data['error'] ?? (_en ? 'PC action failed.' : 'PC-Aktion fehlgeschlagen.')}');
+        throw ApiException('${data['error'] ?? (_en ? 'PC action failed.' : 'PC-Aktion fehlgeschlagen.')}');
       }
       var result = data['output']?.toString();
       if (result == null || result.trim().isEmpty) {
@@ -232,13 +232,13 @@ class _AiChatViewState extends State<AiChatView> {
       if (!mounted) return;
       setState(() {
         _actionRequests.remove(index);
-        _actionResults[index] = result!.length > 5000 ? '\${result.substring(0, 5000)}…' : result;
+        _actionResults[index] = result!.length > 5000 ? '${result.substring(0, 5000)}…' : result;
       });
     } catch (error) {
       if (mounted) {
         setState(() {
           _actionRequests.remove(index);
-          _actionResults[index] = '\${_en ? 'Action failed' : 'Aktion fehlgeschlagen'}: \$error';
+          _actionResults[index] = '${_en ? 'Action failed' : 'Aktion fehlgeschlagen'}: $error';
         });
       }
     } finally {
