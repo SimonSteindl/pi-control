@@ -44,9 +44,28 @@ Bekannte Credential-Bereiche und -Dateitypen sind standardmäßig gesperrt, daru
 
 Den freigegebenen Stammordner kann man beim direkten Start von `local_api.py` mit `--access-root PFAD` ändern. Die API bleibt lokal und token-geschützt.
 
-## Nächste Ausbaustufen
+## Neue Aktions-API (noch nicht mit dem Pi-Control-Chat gekoppelt)
+
+Die lokale API unterstützt zusätzlich:
+- `POST /v1/file/write`: schreibt eine Textdatei bis 1 MB; bestehende Dateien werden vorher gesichert;
+- `POST /v1/file/delete`: verschiebt Dateien/Ordner in den Agent-Papierkorb statt sie endgültig zu löschen;
+- `POST /v1/command`: führt eine Argumentliste ohne Shell-Auswertung aus, maximal 120 Sekunden.
+
+**Jede dieser drei Aktionen verlangt `"approved": true`.** Dieses Flag darf ausschließlich aus einer echten Bestätigung im Pi-Control-UI gesetzt werden; es darf niemals automatisch aus einer KI-Antwort übernommen werden. Die UI-/Pi-Backend-Freigabe ist noch nicht integriert, daher sind diese Aktionen noch nicht im Chat verfügbar.
+
+### Optionale private Tailscale-Anbindung
+
+Standardmäßig bleibt die API ausschließlich auf `127.0.0.1:8765`. Eine Netzwerkschnittstelle darf nur ausdrücklich konfiguriert werden und verlangt eine genaue Client-IP-Allowlist. Beispiel (erst verwenden, wenn Pi-Control-Backend und Firewall passend eingerichtet sind):
+
+```bash
+python3 ./pc-agent/agent.py serve --bind-host 100.99.171.96 --allowed-client 100.73.19.27
+```
+
+Dazu muss die Firewall TCP-Port 8765 ausschließlich für die Tailscale-IP des Raspberry Pi erlauben. **Keinen Router-Port, ngrok oder öffentlichen Tunnel dafür öffnen.** Die tatsächliche Chat-Kopplung und die Bestätigungsdialoge sind noch nicht abgeschlossen.
+
+## Geplante nächste Ausbaustufen
 
 - sichere Verbindung zum Pi-Control-Chat mit ausdrücklicher Geräte-Kopplung;
-- Dateiänderungen als Diff vorschlagen und erst nach Bestätigung anwenden;
-- Maus-/Tastatursteuerung nur lokal, sichtbar und auf ausdrückliche Aktion starten;
-- keine Admin-Aktionen, Installationen oder Löschungen ohne gesonderte Bestätigung.
+- Bestätigungsdialoge für Befehle, Dateiänderungen, Löschungen und Systemaktionen;
+- Maus-/Tastatursteuerung nur sichtbar und auf ausdrückliche Aktion starten;
+- Admin-Aktionen und Installationen nur nach gesonderter Bestätigung.
