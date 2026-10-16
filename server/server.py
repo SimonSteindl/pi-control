@@ -2062,14 +2062,14 @@ def api_ai_chat():
     )
     if pc_agent_enabled:
         system_prompt += (
-            "\\n\\nDu kannst eine PC-Aktion vorschlagen, wenn der Nutzer ausdrücklich möchte, dass du etwas auf seinem CachyOS-PC erledigst. "
+            "\n\nDu kannst eine PC-Aktion vorschlagen, wenn der Nutzer ausdrücklich möchte, dass du etwas auf seinem CachyOS-PC erledigst. "
             "Nutze dafür propose_pc_action und genau eine Aktion pro Vorschlag. Die Aktion wird niemals automatisch ausgeführt; "
             "der Nutzer muss sie im Pi-Control-UI bestätigen. Bei Löschen, Dateiüberschreiben, Befehlen, Installationen oder Systemänderungen "
             "erkläre klar, was passieren soll. Für reine Fragen und Erklärungen rufe das Tool nicht auf."
         )
     messages = [{
         "role": "system",
-        "content": system_prompt + "\\n\\n" + format_ai_memory_context(current_user_id()),
+        "content": system_prompt + "\n\n" + format_ai_memory_context(current_user_id()),
     }]
     for item in raw_messages[-12:]:
         if not isinstance(item, dict):
