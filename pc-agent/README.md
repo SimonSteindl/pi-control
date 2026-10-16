@@ -1,76 +1,52 @@
-# Pi-Control PC-Agent (erste sichere Basis)
+# Pi-Control PC-Agent
 
-Der Helfer ist für **Windows 11 und Linux (einschließlich CachyOS)** ausgelegt. Er benötigt nur Python 3 und für Git-Funktionen eine Git-Installation.
+Der Helfer ist für **Windows 11 und Linux (einschließlich CachyOS)** ausgelegt. Er benötigt Python 3; für Git-Funktionen zusätzlich Git.
 
 ## Aktueller Umfang
 
-- zeigt Betriebssystem, Python-Version, Projektpfad und Git-Verfügbarkeit an;
-- zeigt den Git-Status und Änderungen an;
+- zeigt System-, Projekt- und Git-Status;
+- liest Textdateien und listet Ordner im freigegebenen Benutzerverzeichnis;
 - startet den vorhandenen KI-Speichertest;
-- liest Textdateien ausschließlich innerhalb des Projektordners;
-- öffnet einen erlaubten Editor, Browser oder Dateimanager;
-- öffnet ausdrücklich angegebene HTTP(S)-Adressen.
+- öffnet erlaubte Apps und HTTP(S)-Adressen.
 
-**Wichtige Grenze:** Dies ist noch kein autonomer KI-Agent. Er verbindet sich noch nicht mit dem Pi-Control-Chat, bearbeitet Dateien nicht selbstständig und steuert Maus/Tastatur nicht. Er führt keine frei eingegebenen Shell-Befehle aus und öffnet keinen Netzwerkserver.
+**Noch nicht enthalten:** Verbindung zum Pi-Control-Chat, Dateiänderungen, Löschaktionen oder Maus-/Tastatursteuerung. Der Agent führt keine frei eingegebenen Shell-Befehle aus.
 
-## Start unter Windows 11
+## Start
 
-1. Python 3 installieren, falls es noch fehlt.
-2. Repository herunterladen oder klonen.
-3. PowerShell im Projektordner öffnen.
-4. `python .\\pc-agent\\agent.py info` ausführen.
+Im Projektordner:
 
-## Start unter CachyOS/Linux
+- Windows: `python .\\pc-agent\\agent.py info`
+- CachyOS/Linux: `python3 ./pc-agent/agent.py info`
 
-1. Python 3 und Git installieren, falls sie noch fehlen.
-2. Terminal im Projektordner öffnen.
-3. `python3 ./pc-agent/agent.py info` ausführen.
+Die lokale API kann mit `python3 ./pc-agent/agent.py serve` (Linux) beziehungsweise `python .\\pc-agent\\agent.py serve` (Windows) gestartet werden.
 
-## Beispiele
+## Lokale API
 
-Windows:
-- `python .\\pc-agent\\agent.py status`
-- `python .\\pc-agent\\agent.py diff`
-- `python .\\pc-agent\\agent.py read docs/AI-MASTER-GEDAECHTNIS.md`
-- `python .\\pc-agent\\agent.py tests`
-
-Linux:
-- `python3 ./pc-agent/agent.py status`
-- `python3 ./pc-agent/agent.py diff`
-- `python3 ./pc-agent/agent.py read docs/AI-MASTER-GEDAECHTNIS.md`
-- `python3 ./pc-agent/agent.py tests`
-
-Ein anderer Projektordner kann mit `--workspace PFAD` angegeben werden.
-
-## Sicherheitsregeln für die nächsten Ausbaustufen
-
-- Standardmäßig nur den Pi-Control-Projektordner freigeben.
-- Dateiänderungen zuerst als Diff anzeigen und vor dem Anwenden bestätigen lassen.
-- Keine beliebigen Shell-Befehle von einer KI ausführen.
-- Maus/Tastatur-Steuerung nur lokal, sichtbar und auf ausdrückliche Aktion starten.
-- Vor Installationen, Admin-Aktionen, Löschen, Neustarts und Netzwerkänderungen extra fragen.
-- Keine Passwörter, Tokens oder API-Schlüssel in Git einchecken.
-- Erst danach eine lokale, authentifizierte Verbindung zum Pi-Control-Chat entwickeln.
-
-
-## Lokale API für eine spätere Chat-Verbindung
-
-Die optionale lokale API lauscht ausschließlich auf `127.0.0.1:8765`. Sie ist nicht für die Veröffentlichung über Router, Portweiterleitung, ngrok oder öffentliche Tunnel gedacht.
-
-Start:
-- Windows: `python .\\pc-agent\\agent.py serve`
-- CachyOS/Linux: `python3 ./pc-agent/agent.py serve`
-
-Beim ersten Start wird ein zufälliges Zugriffstoken unter `~/.pi-control-agent/token` angelegt (Windows: im Benutzerprofil). Das Token niemals in GitHub, Screenshots oder Chatnachrichten veröffentlichen.
+Die API lauscht ausschließlich auf `127.0.0.1:8765`; **nicht** per Router-Portweiterleitung, ngrok oder öffentlichem Tunnel freigeben. Beim ersten Start wird ein zufälliges Token unter `~/.pi-control-agent/token` angelegt. Das Token niemals teilen oder einchecken.
 
 Geschützte Endpunkte:
+
 - `GET /v1/status`
 - `GET /v1/git/status`
 - `GET /v1/git/diff`
-- `GET /v1/file?path=...` (nur Dateien im Projektordner, maximal 256 KB)
-- `POST /v1/open` mit `{"app":"editor"}`, `browser` oder `file-manager`
-- `POST /v1/tests`
+- `GET /v1/file?path=...` – Textdatei bis 1 MB lesen
+- `GET /v1/files?path=...` – direkten Ordnerinhalt auflisten
+- `POST /v1/open` – nur erlaubte Programme
+- `POST /v1/tests` – vorhandenen Speichertest starten
 
-Alle Anfragen brauchen `Authorization: Bearer <Token>`. Die Browser-CORS-Freigabe ist auf die veröffentlichte Pi-Control-Dashboard-Origin begrenzt. Andere Origins sind nicht freigegeben. Die API führt keine beliebigen Shell-Befehle aus und bietet keine Datei-Schreib- oder Löschroute.
+Alle Anfragen benötigen `Authorization: Bearer <Token>`.
 
-**Noch nicht verbunden:** Das Dashboard ruft diese API noch nicht auf. Eine sichere Chat-Verbindung erfordert als nächsten Schritt eine UI mit Token-Eingabe und sichtbarer Bestätigung für Aktionen. Desktop-Maus/Tastatur-Automatisierung ist ebenfalls noch nicht implementiert.
+## Dateizugriff und Schutz
+
+Standardmäßig darf die API innerhalb des **Benutzerordners** (`~`) lesen und Ordner auflisten. Relative Pfade beziehen sich auf diesen Ordner; absolute Pfade sind nur erlaubt, wenn sie darin liegen. Symlinks, die nach außerhalb führen, werden durch die Pfadauflösung nicht als Zugriff außerhalb zugelassen.
+
+Bekannte Credential-Bereiche und -Dateitypen sind standardmäßig gesperrt, darunter `.ssh`, `.gnupg`, `.pki`, `.password-store`, Keyrings, `.env`, `.netrc`, Dateien namens `credentials` oder `token` sowie private Schlüsseldateien wie `.pem`, `.key`, `.p12` und `.pfx`. Das ist eine Schutzschicht, keine vollständige Erkennung aller möglichen Geheimnisse. Vor dem Teilen von Ausgaben weiterhin prüfen, dass sie keine privaten Daten enthalten.
+
+Den freigegebenen Stammordner kann man beim direkten Start von `local_api.py` mit `--access-root PFAD` ändern. Die API bleibt lokal und token-geschützt.
+
+## Nächste Ausbaustufen
+
+- sichere Verbindung zum Pi-Control-Chat mit ausdrücklicher Geräte-Kopplung;
+- Dateiänderungen als Diff vorschlagen und erst nach Bestätigung anwenden;
+- Maus-/Tastatursteuerung nur lokal, sichtbar und auf ausdrückliche Aktion starten;
+- keine Admin-Aktionen, Installationen oder Löschungen ohne gesonderte Bestätigung.
