@@ -189,12 +189,11 @@ class _AiChatViewState extends State<AiChatView> {
     final type = '${action['action'] ?? ''}';
     if (type == 'run_command') {
       final command = action['command'];
-      return command is List ? command.map((part) => '$part').join(' ') : '$command';
+      return command is List ? jsonEncode(command) : '$command';
     }
     if (type == 'write_file') {
       final content = '${action['content'] ?? ''}';
-      final preview = content.length > 1200 ? '${content.substring(0, 1200)}…' : content;
-      return 'Pfad: ${action['path'] ?? ''}\n\nInhalt:\n$preview';
+      return 'Pfad: ${action['path'] ?? ''}\n\nVollständiger Inhalt:\n$content';
     }
     if (type == 'delete_file') return 'Pfad: ${action['path'] ?? ''}\n\nDer Eintrag wird in den Agent-Papierkorb verschoben, nicht sofort endgültig gelöscht.';
     if (type == 'open') return 'Programm: ${action['app'] ?? ''}';
