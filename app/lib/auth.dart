@@ -79,7 +79,10 @@ class PiApiClient {
   void close() => _httpClient.close();
 
   bool _isPrivateNetworkHost(String host) {
-    final normalized = host.toLowerCase().replaceAll('[', '').replaceAll(']', '');
+    final normalized = host
+        .toLowerCase()
+        .replaceAll('[', '')
+        .replaceAll(']', '');
     if (normalized == 'localhost' ||
         normalized.endsWith('.local') ||
         normalized == '::1' ||
