@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, urlparse
 
 PORT = 8765
 ALLOWED_ORIGINS = {"https://pi-control-dashboard.steindlsimon12.workers.dev"}
-MAX_BODY = 4096
+MAX_BODY = 1_100_000
 MAX_FILE_BYTES = 1_000_000
 MAX_DIRECTORY_ENTRIES = 300
 MAX_WRITE_BYTES = 1_000_000
