@@ -2158,6 +2158,11 @@ def api_ai_chat():
         }[action]
         if any(key not in arguments for key in required):
             return jsonify({"ok": False, "error": "Der Aktionsvorschlag ist unvollständig."}), 502
+        if action == "write_file" and (
+            not isinstance(arguments.get("content"), str)
+            or len(arguments["content"]) > 20000
+        ):
+            return jsonify({"ok": False, "error": "Die vorgeschlagene Datei ist zu groß für eine vollständige Vorschau. Bitte teile die Aufgabe in kleinere Dateien auf."}), 502
         if action == "run_command" and (
             not isinstance(arguments.get("command"), list)
             or not arguments["command"]
