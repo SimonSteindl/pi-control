@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'pc-agent/**'
+      - 'scripts/install-pc-agent-bridge-pi.sh'
       - '.github/workflows/pc-agent-tests.yml'
   push:
     branches: [main, feature/cross-platform-pc-agent, feature/pc-agent-bridge-mvp]
@@ -27,7 +28,7 @@ jobs:
       - name: Check Python and shell syntax
         run: |
           python -m py_compile pc-agent/agent.py pc-agent/local_api.py pc-agent/bridge_client.py pc-agent/test_local_api.py
-          bash -n pc-agent/start-bridge.sh
+          bash -n pc-agent/start-bridge.sh scripts/install-pc-agent-bridge-pi.sh
       - name: Smoke test
         run: |
           python pc-agent/agent.py info
