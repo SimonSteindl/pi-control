@@ -38,6 +38,10 @@ jobs:
         working-directory: app
         run: flutter analyze --no-pub
 
+      - name: Run Flutter tests
+        working-directory: app
+        run: flutter test --no-pub
+
       - name: Build release APK
         working-directory: app
         run: flutter build apk --release
