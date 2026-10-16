@@ -46,6 +46,6 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           # Normalize the account ID in case the GitHub secret contains surrounding whitespace/newlines/quotes.
-          CLOUDFLARE_ACCOUNT_ID="$(python3 -c 'import os; print(os.environ["CLOUDFLARE_ACCOUNT_ID"].strip().strip("\"\\x27"))')"
+          CLOUDFLARE_ACCOUNT_ID="$(python3 -c 'import os; print(os.environ["CLOUDFLARE_ACCOUNT_ID"].strip().strip(chr(34) + chr(39)))')"
           export CLOUDFLARE_ACCOUNT_ID
           npx --yes wrangler@4 deploy
