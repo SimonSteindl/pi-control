@@ -78,9 +78,9 @@ jobs:
       - name: Validate Worker deployment configuration
         working-directory: server/dashboard-worker
         run: |
-          # Remove accidental whitespace/newlines/quotes from the GitHub account-ID secret.
-          CLOUDFLARE_ACCOUNT_ID="$(python3 -c 'import os; print(os.environ["CLOUDFLARE_ACCOUNT_ID"].strip().strip(chr(34) + chr(39)))')"
-          export CLOUDFLARE_ACCOUNT_ID
+          # Dry-run validates the bundle/config only; it must also work on pull requests
+          # where repository secrets are intentionally unavailable.
+          export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-00000000000000000000000000000000}"
           npx --yes wrangler@4 deploy --dry-run
 
       - name: Upload dashboard build for inspection
