@@ -2248,6 +2248,8 @@ class _DashboardPageState extends State<DashboardPage>
                     FeatureHubView(
                       client: widget.client,
                       session: widget.session,
+                      accentColor: widget.accentColor,
+                      english: english,
                     ),
                   ],
                 ),
