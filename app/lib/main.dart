@@ -289,7 +289,7 @@ class _DashboardPageState extends State<DashboardPage>
   String? androidUpdatePath;
   List<String> dashboardShortcuts = ['files', 'more', 'backups', 'search'];
 
-  static const clientAppVersion = '2.4.0';
+  static const clientAppVersion = '2.4.3';
 
   Future<http.Response> _apiGet(
     String path, {
