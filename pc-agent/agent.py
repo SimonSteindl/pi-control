@@ -67,6 +67,9 @@ def main() -> int:
     parser.add_argument("action", choices=["info", "status", "diff", "tests", "read", "open", "url", "serve"])
     parser.add_argument("target", nargs="?", help="Relativer Dateipfad, Programmname oder URL")
     parser.add_argument("--workspace", help="Pi-Control-Projektordner überschreiben")
+    parser.add_argument("--access-root", default=str(Path.home()), help="Freigegebener Dateibereich; Standard ist das Benutzerverzeichnis")
+    parser.add_argument("--bind-host", default="127.0.0.1", help="Listener-Adresse; Standard bleibt nur lokal erreichbar")
+    parser.add_argument("--allowed-client", action="append", default=[], help="Exakte erlaubte Client-IP für den Netzwerkzugriff")
     parsed = parser.parse_args()
 
     global WORKSPACE
@@ -82,7 +85,15 @@ def main() -> int:
         if not api_file.is_file():
             print("Lokale API-Datei fehlt.", file=sys.stderr)
             return 2
-        return run([sys.executable, str(api_file), "--workspace", str(WORKSPACE)], timeout=86400)
+        api_args = [
+            sys.executable, str(api_file),
+            "--workspace", str(WORKSPACE),
+            "--access-root", str(Path(parsed.access_root).expanduser().resolve()),
+            "--bind-host", parsed.bind_host,
+        ]
+        for client_ip in parsed.allowed_client:
+            api_args.extend(["--allowed-client", client_ip])
+        return run(api_args, timeout=86400)
     if parsed.action == "info":
         print(f"System: {platform.system()} {platform.release()}")
         print(f"Python: {platform.python_version()}")
