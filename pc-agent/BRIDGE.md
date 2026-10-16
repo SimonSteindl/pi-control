@@ -15,7 +15,7 @@ No shell execution, writes, deletes, installs, mouse or keyboard control are pro
 
 ## Authentication model
 
-- `POST /api/pc-agent/tasks` is protected by Pi-Control's normal logged-in user session.
+- `POST /api/pc-agent/tasks` is restricted to a logged-in Pi-Control administrator session.
 - `GET /api/pc-agent/next` and `POST /api/pc-agent/results` require a separate high-entropy bearer token shared only between the Pi server and the PC bridge.
 - The PC local API remains on `127.0.0.1:8765`; never expose it with a router port-forward, ngrok, or a public tunnel.
 - The task/result queue is currently in memory. Pending tasks and results are lost if the Pi server restarts. This is an MVP, not production-ready.
