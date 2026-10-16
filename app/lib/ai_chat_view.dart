@@ -9,12 +9,14 @@ class AiChatView extends StatefulWidget {
   final PiApiClient client;
   final Color accentColor;
   final bool english;
+  final String conversationScope;
 
   const AiChatView({
     super.key,
     required this.client,
     required this.accentColor,
     required this.english,
+    this.conversationScope = 'default',
   });
 
   @override
@@ -30,7 +32,8 @@ class _AiChatViewState extends State<AiChatView> {
   bool _busy = false;
   bool _loadingMemories = false;
   String? _error;
-  static const String _chatStorageKey = 'pi_control_ai_chat_messages';
+  String get _chatStorageKey =>
+      'pi_control_ai_chat_messages_${Uri.encodeComponent(widget.client.activeBase)}_${Uri.encodeComponent(widget.conversationScope)}';
 
   bool get _en => widget.english;
 
@@ -433,6 +436,8 @@ class _AiChatViewState extends State<AiChatView> {
                   controller: _input,
                   minLines: 1,
                   maxLines: 5,
+                  maxLength: 12000,
+                  buildCounter: (_, {required currentLength, required isFocused, maxLength}) => null,
                   textInputAction: TextInputAction.send,
                   onSubmitted: (_) => _send(),
                   decoration: InputDecoration(
