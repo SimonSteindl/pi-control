@@ -148,10 +148,16 @@ class PiApiClient {
     Object? body,
     Duration timeout = const Duration(seconds: 10),
   }) async {
-    final orderedBases = <String>[
-      activeBase,
-      ...candidates.where((base) => base != activeBase),
-    ];
+    // Never replay login credentials, mutations, or an authenticated request
+    // against another server. A fallback server could be a different device,
+    // and the bearer token belongs only to the explicitly selected origin.
+    // Only unauthenticated GET requests may probe the configured candidates.
+    final orderedBases = token == null && method == 'GET'
+        ? <String>[
+            activeBase,
+            ...candidates.where((base) => base != activeBase),
+          ]
+        : <String>[activeBase];
     Object? lastError;
 
     for (final base in orderedBases) {
