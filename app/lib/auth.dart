@@ -425,7 +425,7 @@ class PiApiClient {
       try {
         final base = _normalizeServerAddress(storedBase);
         if (!candidates.contains(base)) candidates.add(base);
-      } on ApiException {
+      } catch (_) {
         // Ignore old or unsafe saved addresses instead of using them implicitly.
       }
     }
