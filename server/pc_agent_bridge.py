@@ -32,7 +32,7 @@ def register_pc_agent_bridge(app):
         path = data.get("path", "")
         if action not in ("list_files", "read_file"):
             return jsonify({"ok": False, "error": "unsupported action"}), 400
-        if not isinstance(path, str) or len(path) > 2048 or "\\x00" in path:
+        if not isinstance(path, str) or len(path) > 2048 or "\x00" in path:
             return jsonify({"ok": False, "error": "invalid path"}), 400
         task = {"id": secrets.token_urlsafe(18), "action": action,
                 "path": path, "created_at": int(time.time())}
