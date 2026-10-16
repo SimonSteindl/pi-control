@@ -1,0 +1,30 @@
+name: Public website checks
+
+on:
+  push:
+    branches: [main, feature/full-product-overhaul]
+    paths:
+      - 'server/public-site/**'
+      - '.github/workflows/public-site-checks.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/public-site/**'
+      - '.github/workflows/public-site-checks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-site:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Validate HTML metadata, navigation and sitemap
+        run: python server/public-site/test_site.py

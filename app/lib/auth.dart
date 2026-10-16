@@ -78,11 +78,72 @@ class PiApiClient {
 
   void close() => _httpClient.close();
 
+  bool _isPrivateNetworkHost(String host) {
+    final normalized = host
+        .toLowerCase()
+        .replaceAll('[', '')
+        .replaceAll(']', '');
+    if (normalized == 'localhost' ||
+        normalized.endsWith('.local') ||
+        normalized == '::1' ||
+        normalized.startsWith('fc') ||
+        normalized.startsWith('fd') ||
+        normalized.startsWith('fe80:')) {
+      return true;
+    }
+    final parts = normalized.split('.');
+    if (parts.length != 4) return false;
+    final octets = parts.map(int.tryParse).toList();
+    if (octets.any((value) => value == null || value < 0 || value > 255)) {
+      return false;
+    }
+    final a = octets[0]!;
+    final b = octets[1]!;
+    return a == 10 ||
+        a == 127 ||
+        (a == 192 && b == 168) ||
+        (a == 172 && b >= 16 && b <= 31) ||
+        (a == 169 && b == 254) ||
+        (a == 100 && b >= 64 && b <= 127);
+  }
+
+  String _normalizeServerAddress(String address) {
+    var value = address.trim();
+    if (value.isEmpty) throw const ApiException('Serveradresse fehlt.');
+    if (!value.startsWith('http://') && !value.startsWith('https://')) {
+      value = 'https://$value';
+    }
+    value = value.replaceAll(RegExp(r'/+$'), '');
+    if (!value.endsWith('/api')) value = '$value/api';
+    final uri = Uri.tryParse(value);
+    if (uri == null ||
+        !uri.hasAuthority ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment ||
+        uri.pathSegments.contains('..')) {
+      throw const ApiException('Ungültige Serveradresse.');
+    }
+    if (uri.scheme != 'https' &&
+        !(uri.scheme == 'http' && _isPrivateNetworkHost(uri.host))) {
+      throw const ApiException(
+        'Für externe Server ist HTTPS erforderlich. HTTP ist nur im lokalen oder privaten Netzwerk erlaubt.',
+      );
+    }
+    return value;
+  }
+
   Future<void> initialize() async {
     final preferences = await SharedPreferences.getInstance();
     final saved = preferences.getStringList('pi_control_servers') ?? const [];
-    for (final base in saved) {
-      if (!candidates.contains(base)) candidates.add(base);
+    for (final storedBase in saved) {
+      try {
+        final base = _normalizeServerAddress(storedBase);
+        if (!candidates.contains(base)) candidates.add(base);
+      } catch (_) {
+        // Ignore old or unsafe saved addresses instead of using them implicitly.
+      }
     }
     final preferred = preferences.getString('pi_control_active_server');
     if (preferred != null && candidates.contains(preferred)) {
@@ -91,14 +152,7 @@ class PiApiClient {
   }
 
   Future<void> addServer(String address) async {
-    var value = address.trim();
-    if (!value.startsWith('http://') && !value.startsWith('https://')) {
-      value = 'https://$value';
-    }
-    value = value.replaceAll(RegExp(r'/+$'), '');
-    if (!value.endsWith('/api')) value = '$value/api';
-    final uri = Uri.parse(value);
-    if (!uri.hasAuthority) throw const ApiException('Ungültige Serveradresse.');
+    final value = _normalizeServerAddress(address);
     if (!candidates.contains(value)) candidates.add(value);
     activeBase = value;
     token = null;
@@ -117,7 +171,7 @@ class PiApiClient {
     await preferences.setString('pi_control_active_server', value);
   }
 
-  Future<void> selectServer(String base) async {
+    Future<void> selectServer(String base) async {
     if (!candidates.contains(base)) return;
     activeBase = base;
     token = null;
@@ -148,10 +202,14 @@ class PiApiClient {
     Object? body,
     Duration timeout = const Duration(seconds: 10),
   }) async {
-    final orderedBases = <String>[
-      activeBase,
-      ...candidates.where((base) => base != activeBase),
-    ];
+    // Never replay login credentials, mutations, or an authenticated request
+    // against another server. Only unauthenticated GET requests may probe candidates.
+    final orderedBases = token == null && method == 'GET'
+        ? <String>[
+            activeBase,
+            ...candidates.where((base) => base != activeBase),
+          ]
+        : <String>[activeBase];
     Object? lastError;
 
     for (final base in orderedBases) {

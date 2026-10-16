@@ -1,116 +1,125 @@
-# Pi Control
+# Pi-Control
 
-Pi Control ist ein Projekt zur **Überwachung und Verwaltung eines Raspberry Pi** über eine eigene App.
+**Pi-Control** is an open-source, self-hosted dashboard for monitoring and managing a Raspberry Pi through a Flutter app and browser interface.
 
-Das Repository besteht bewusst aus zwei Hauptbereichen:
+- **Public website:** https://pi-control-public.steindlsimon12.workers.dev/
+- **Source code:** https://github.com/SimonSteindl/pi-control
+- **Downloads:** https://github.com/SimonSteindl/pi-control/releases
+- **Issues and feature requests:** https://github.com/SimonSteindl/pi-control/issues
 
-- `app/` – Mobile App
-- `server/` – Raspberry-Pi-Server
+> Pi-Control is actively developed. Check the current release notes and setup instructions before updating a running Raspberry Pi.
 
-## 📁 Projektstruktur
+## What it includes
+
+- System overview: CPU temperature, uptime, memory, storage and network information.
+- Resource history and CPU benchmark information.
+- File manager for connected storage, with supported previews and permission-controlled actions.
+- Backup tools and media selection workflows.
+- Aviation weather lookup for METAR/TAF by ICAO code.
+- Account/session management and permission-aware admin tools.
+- Optional AI chat and saved memories when the server's AI configuration is available.
+- Android app and browser-based dashboard.
+
+Features depend on the Raspberry Pi hardware, enabled server modules, account permissions and configuration.
+
+## Project structure
 
 ```text
 pi-control/
-├── app/
+├── app/                    # Flutter app (Android and web build)
 ├── server/
+│   ├── server.py           # Python/Flask API
+│   ├── public-site/        # Public product landing page
+│   └── dashboard-worker/   # Cloudflare static dashboard worker
+├── .github/workflows/      # Build, test and publishing automation
 └── README.md
 ```
 
-## 📱 App
-
-Die App ist die Benutzeroberfläche von Pi Control.
-
-Sie kommuniziert mit dem Pi-Control-Server und kann Informationen des Raspberry Pi anzeigen.
-
-Geplante bzw. unterstützte Informationen können unter anderem sein:
-
-- 🌡️ CPU-Temperatur
-- 💾 Speicherplatz
-- 🗄️ angeschlossener Speicher
-- 🧠 RAM-Auslastung
-- ⏱️ Uptime
-- 🌐 Netzwerk-/IP-Informationen
-- ⚠️ Warnungen bei Problemen
-
-Die App befindet sich in `app/`.
-
-## 🖥️ Server
-
-Der Server läuft direkt auf dem Raspberry Pi.
-
-Er sammelt Systeminformationen und stellt diese über eine API für die App bereit.
-
-Der Server befindet sich in `server/`.
-
-Der Server basiert auf **Python/Flask**.
-
-## 🔄 Kommunikation
-
-Die grundlegende Kommunikation sieht so aus:
+## Architecture
 
 ```text
-┌──────────────┐
-│   Pi Control │
-│      App     │
-└──────┬───────┘
-       │ HTTP / API
-       ▼
-┌──────────────┐
-│ Pi Control   │
-│    Server    │
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│ Raspberry Pi │
-│ Systemdaten  │
-└──────────────┘
+Flutter app / browser
+        │
+        │ authenticated API requests
+        ▼
+Python + Flask on your Raspberry Pi
+        │
+        ├── System and storage information
+        ├── Account and permission checks
+        ├── File and backup features
+        └── Optional configured AI service
 ```
 
-Die App ruft die API des Servers auf und erhält die aktuellen Informationen des Raspberry Pi.
+The public landing page is separate from the private dashboard and does not need access to your device API.
 
-## ⚙️ Server
+## Requirements
 
-Der Server ist dafür gedacht, dauerhaft auf dem Raspberry Pi zu laufen.
+- A compatible Raspberry Pi or Linux host supported by the server code.
+- Python 3 and the Python dependencies used by the server.
+- Flutter SDK matching the app's configured SDK constraints when building locally.
+- Android or a modern browser for the client.
+- Network access between the client and the server, or a deliberately configured secure remote-access method.
 
-Wenn der Server über systemd eingerichtet ist, kann sein Status beispielsweise mit folgendem Befehl geprüft werden:
+Review the current source and release notes for exact setup requirements. Do not assume a fresh install and an existing installation use identical paths or service settings.
+
+## Development and checks
+
+### Flutter app
+
+From the repository root:
 
 ```bash
-sudo systemctl status pi-control
+cd app
+flutter pub get --enforce-lockfile
+flutter analyze
+flutter test
+flutter build apk --release
 ```
 
-Neustart nach Änderungen:
+The GitHub Actions workflow runs static analysis and builds a release APK. Pull-request builds are for validation; published downloads are listed on the Releases page.
+
+### Public website
+
+The static site is in `server/public-site/`. Run its dependency-free quality checks from the repository root:
 
 ```bash
-sudo systemctl restart pi-control
+python3 server/public-site/test_site.py
 ```
 
-## 🤖 Hinweise für KI / Coding Agents
+The check validates essential metadata, navigation anchors, canonical URL, sitemap, robots.txt and key project links.
 
-Dieses Repository enthält **nur die beiden Projektbereiche `app/` und `server/`**.
+### Raspberry Pi server
 
-### Regeln
+The server entry point is `server/server.py`. If you already have a working installation, back up your configuration and review the exact diff before switching branches or restarting services.
 
-- Änderungen an der App gehören nach `app/`.
-- Änderungen am Raspberry-Pi-Server gehören nach `server/`.
-- Keine unnötigen zusätzlichen Projekte oder Ordner erstellen.
-- Bestehende Funktionen nicht ohne Grund entfernen.
-- Die Kommunikation zwischen App und Server muss bei Änderungen berücksichtigt werden.
-- Vorhandene API-Strukturen möglichst kompatibel halten.
-- Bei Serveränderungen berücksichtigen, dass der Code direkt auf einem Raspberry Pi läuft.
-- Keine Passwörter, API-Keys oder andere Geheimnisse in das Repository committen.
-- Vor größeren Änderungen zuerst die vorhandene Struktur und den bestehenden Code prüfen.
+Typical service checks (when installed as a systemd unit):
 
-## 🚧 Entwicklungsstatus
+```bash
+sudo systemctl status pi-control.service
+sudo journalctl -u pi-control.service -n 100 --no-pager
+```
 
-Pi Control befindet sich in aktiver Entwicklung.
+Use the service name and paths actually configured on your device.
 
-Funktionen und die Benutzeroberfläche können sich noch ändern und erweitert werden.
+## Security notes
 
-## 🎯 Ziel
+- Never commit passwords, session tokens, private keys, API credentials or personal backups.
+- Use HTTPS for remote access. Do not expose a development API or loopback-only local agent directly to the internet.
+- Keep the Pi-Control server and operating system updated.
+- Give each account only the permissions it needs.
+- Before using an experimental feature or branch on your daily server, read its limitations and test it separately where possible.
 
-Das Ziel von Pi Control ist eine einfache und übersichtliche Möglichkeit, einen Raspberry Pi über eine eigene App zu überwachen und zu verwalten.
+## Contribution guidelines
 
----
+- Preserve existing API behavior unless a change is deliberate and documented.
+- Keep Flutter code in `app/` and Raspberry Pi API code in `server/`.
+- Add or update automated checks when changing behavior.
+- Test on the supported runtime; CI success alone does not prove a feature works on every Raspberry Pi model.
+- Explain configuration changes and rollback steps.
+- Keep secrets out of commits, issue reports and screenshots.
 
-**Pi Control – Raspberry Pi monitoring and control made simple.**
+## Project status
+
+Pi-Control is under active development. Some optional features need extra server configuration, and changes may be released as prerelease builds before they are considered stable.
+
+**Pi-Control — your Raspberry Pi, at a glance.**

@@ -90,7 +90,7 @@ extension PiLayoutStyleDetails on PiLayoutStyle {
 PiLayoutStyle piLayoutStyleFromKey(String? value) {
   return PiLayoutStyle.values.firstWhere(
     (style) => style.storageKey == value,
-    orElse: () => PiLayoutStyle.commandCenter,
+    orElse: () => PiLayoutStyle.aurora,
   );
 }
 
