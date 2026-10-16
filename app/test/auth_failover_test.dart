@@ -33,6 +33,22 @@ void main() {
       client.close();
     });
 
+    test('remote HTTP server addresses are rejected', () async {
+      final client = PiApiClient(
+        httpClient: MockClient((request) async => http.Response('{}', 200)),
+      );
+
+      await expectLater(
+        client.addServer('http://public.example.com'),
+        throwsA(isA<ApiException>()),
+      );
+      await expectLater(
+        client.addServer('https://user:password@private.example.com'),
+        throwsA(isA<ApiException>()),
+      );
+      client.close();
+    });
+
     test('authenticated requests stay on the selected server', () async {
       final requests = <http.BaseRequest>[];
       final client = PiApiClient(
