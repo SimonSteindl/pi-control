@@ -2103,6 +2103,7 @@ def api_ai_chat():
         "model": model,
         "messages": messages,
         "stream": False,
+        "think": False,
         "options": {"num_ctx": 4096, "num_predict": 512},
     }
     if pc_agent_enabled:
