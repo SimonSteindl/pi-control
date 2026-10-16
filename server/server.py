@@ -31,6 +31,7 @@ from pathlib import Path
 
 from flask import Flask, Response, g, jsonify, request, send_file, send_from_directory
 from werkzeug.security import check_password_hash, generate_password_hash
+from pc_agent_bridge import register_pc_agent_bridge
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 256 * 1024 * 1024
@@ -4972,6 +4973,8 @@ def api_cpu_benchmark():
         last_benchmark_finished = time.monotonic()
         benchmark_lock.release()
 
+
+register_pc_agent_bridge(app)
 
 if __name__ == "__main__":
     BASE_DIR.mkdir(parents=True, exist_ok=True)
