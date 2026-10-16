@@ -34,6 +34,8 @@ def _validate_task(action, path):
     if parts[0] != "pi-control" or any(part in ("", ".", "..") for part in parts):
         if path != "pi-control":
             raise ValueError("Path must stay inside the pi-control project")
+    if any(part.lower() in {".git", ".ssh", ".gnupg", ".pki", ".password-store"} for part in parts):
+        raise ValueError("Private or internal folders are not available through the bridge")
     return path
 
 
