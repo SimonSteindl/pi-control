@@ -25,6 +25,9 @@ class _AiChatViewState extends State<AiChatView> {
   final TextEditingController _input = TextEditingController();
   final ScrollController _scroll = ScrollController();
   final List<Map<String, String>> _messages = [];
+  final Map<int, Map<String, dynamic>> _actionRequests = {};
+  final Map<int, String> _actionResults = {};
+  final Set<int> _actionBusy = {};
   List<Map<String, dynamic>> _memories = [];
   String _model = 'qwen3:1.7b';
   bool _busy = false;
@@ -142,7 +145,14 @@ class _AiChatViewState extends State<AiChatView> {
         throw ApiException(_en ? 'The AI returned an empty answer.' : 'Die KI hat keine Antwort geliefert.');
       }
       if (!mounted) return;
-      setState(() => _messages.add({'role': 'assistant', 'content': content.trim()}));
+      setState(() {
+        final index = _messages.length;
+        _messages.add({'role': 'assistant', 'content': content.trim()});
+        final action = data['action_request'];
+        if (action is Map) {
+          _actionRequests[index] = Map<String, dynamic>.from(action);
+        }
+      });
       await _saveChat();
       if (RegExp(r'^\s*(merk(?:e)?\s+dir|speicher|remember)', caseSensitive: false).hasMatch(text)) {
         await _loadMemories();
@@ -152,6 +162,88 @@ class _AiChatViewState extends State<AiChatView> {
       if (mounted) setState(() => _error = error.toString());
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  String _actionTitle(Map<String, dynamic> action) {
+    final type = '\${action['action'] ?? ''}';
+    if (_en) {
+      switch (type) {
+        case 'write_file': return 'Write or replace a file';
+        case 'delete_file': return 'Move file/folder to agent trash';
+        case 'run_command': return 'Run command on your PC';
+        case 'open': return 'Open an application';
+      }
+      return 'PC action';
+    }
+    switch (type) {
+      case 'write_file': return 'Datei schreiben/überschreiben';
+      case 'delete_file': return 'Datei/Ordner in den Agent-Papierkorb verschieben';
+      case 'run_command': return 'Befehl auf deinem PC ausführen';
+      case 'open': return 'Programm öffnen';
+    }
+    return 'PC-Aktion';
+  }
+
+  String _actionDetails(Map<String, dynamic> action) {
+    final type = '\${action['action'] ?? ''}';
+    if (type == 'run_command') {
+      final command = action['command'];
+      return command is List ? command.map((part) => '\$part').join(' ') : '\$command';
+    }
+    if (type == 'write_file') {
+      final content = '\${action['content'] ?? ''}';
+      final preview = content.length > 1200 ? '\${content.substring(0, 1200)}…' : content;
+      return 'Pfad: \${action['path'] ?? ''}\\n\\nInhalt:\\n\$preview';
+    }
+    if (type == 'delete_file') return 'Pfad: \${action['path'] ?? ''}\\n\\nDer Eintrag wird in den Agent-Papierkorb verschoben, nicht sofort endgültig gelöscht.';
+    if (type == 'open') return 'Programm: \${action['app'] ?? ''}';
+    return '\${action['path'] ?? ''}';
+  }
+
+  Future<void> _rejectAction(int index) async {
+    if (!mounted) return;
+    setState(() {
+      _actionRequests.remove(index);
+      _actionResults[index] = _en ? 'Rejected. Nothing was executed.' : 'Abgelehnt. Es wurde nichts ausgeführt.';
+    });
+  }
+
+  Future<void> _approveAction(int index) async {
+    final action = _actionRequests[index];
+    if (action == null || _actionBusy.contains(index)) return;
+    setState(() => _actionBusy.add(index));
+    try {
+      final payload = Map<String, dynamic>.from(action)..['approved'] = true;
+      final response = await widget.client.post(
+        'pc-agent/action',
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+        timeout: const Duration(seconds: 140),
+      );
+      final data = widget.client.decodeObject(response);
+      if (response.statusCode != 200 || data['ok'] != true) {
+        throw ApiException('\${data['error'] ?? (_en ? 'PC action failed.' : 'PC-Aktion fehlgeschlagen.')}');
+      }
+      var result = data['output']?.toString();
+      if (result == null || result.trim().isEmpty) {
+        result = const JsonEncoder.withIndent('  ').convert(data);
+      }
+      if (!mounted) return;
+      setState(() {
+        _actionRequests.remove(index);
+        _actionResults[index] = result!.length > 5000 ? '\${result.substring(0, 5000)}…' : result;
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _actionRequests.remove(index);
+          _actionResults[index] = '\${_en ? 'Action failed' : 'Aktion fehlgeschlagen'}: \$error';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _actionBusy.remove(index));
+      _scrollToBottom();
     }
   }
 
@@ -325,6 +417,9 @@ class _AiChatViewState extends State<AiChatView> {
                 onPressed: _busy || _messages.isEmpty ? null : () async {
                   setState(() {
                     _messages.clear();
+                    _actionRequests.clear();
+                    _actionResults.clear();
+                    _actionBusy.clear();
                     _error = null;
                   });
                   await _saveChat();
@@ -394,7 +489,74 @@ class _AiChatViewState extends State<AiChatView> {
                                 : theme.colorScheme.surfaceContainerHighest,
                             child: Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                              child: SelectableText.rich(_formatMessage(message['content'] ?? '', theme.textTheme.bodyMedium)),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  SelectableText.rich(_formatMessage(message['content'] ?? '', theme.textTheme.bodyMedium)),
+                                  if (_actionRequests.containsKey(index)) ...[
+                                    const SizedBox(height: 12),
+                                    Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        border: Border.all(color: theme.colorScheme.error.withValues(alpha: 0.55)),
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Icon(Icons.warning_amber_rounded, color: theme.colorScheme.error),
+                                              const SizedBox(width: 8),
+                                              Expanded(child: Text(_actionTitle(_actionRequests[index]!), style: theme.textTheme.titleSmall)),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 8),
+                                          SelectableText(_actionDetails(_actionRequests[index]!)),
+                                          const SizedBox(height: 10),
+                                          Text(
+                                            _en
+                                                ? 'This action will not run unless you approve it.'
+                                                : 'Diese Aktion wird erst nach deiner Bestätigung ausgeführt.',
+                                            style: theme.textTheme.bodySmall,
+                                          ),
+                                          const SizedBox(height: 10),
+                                          Row(
+                                            mainAxisAlignment: MainAxisAlignment.end,
+                                            children: [
+                                              TextButton(
+                                                onPressed: _actionBusy.contains(index) ? null : () => _rejectAction(index),
+                                                child: Text(_en ? 'Reject' : 'Ablehnen'),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              FilledButton.icon(
+                                                onPressed: _actionBusy.contains(index) ? null : () => _approveAction(index),
+                                                icon: _actionBusy.contains(index)
+                                                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                                                    : const Icon(Icons.check_rounded),
+                                                label: Text(_en ? 'Approve and run' : 'Bestätigen & ausführen'),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                  if (_actionResults.containsKey(index)) ...[
+                                    const SizedBox(height: 10),
+                                    Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.all(10),
+                                      decoration: BoxDecoration(
+                                        color: theme.colorScheme.surface,
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: SelectableText(_actionResults[index]!),
+                                    ),
+                                  ],
+                                ],
+                              ),
                             ),
                           ),
                         ),
