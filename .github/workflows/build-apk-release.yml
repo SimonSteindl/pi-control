@@ -34,6 +34,10 @@ jobs:
         working-directory: app
         run: flutter pub get --enforce-lockfile
 
+      - name: Analyze Flutter code
+        working-directory: app
+        run: flutter analyze --no-pub
+
       - name: Build release APK
         working-directory: app
         run: flutter build apk --release
