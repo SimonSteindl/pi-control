@@ -33,7 +33,7 @@ class PcAgentBridgeTests(unittest.TestCase):
             pc_agent_bridge._results.clear()
         self.app = Flask(__name__)
         self.app.testing = True
-        pc_agent_bridge.register_pc_agent_bridge(self.app, enqueue_auth=lambda: test_user_required)
+        pc_agent_bridge.register_pc_agent_bridge(self.app, enqueue_auth=test_user_required)
         self.client = self.app.test_client()
 
     def tearDown(self):
