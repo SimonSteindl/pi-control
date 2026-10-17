@@ -4,12 +4,13 @@ Der Helfer ist für **Windows 11 und Linux (einschließlich CachyOS)** ausgelegt
 
 ## Aktueller Umfang
 
-- zeigt System-, Projekt- und Git-Status;
-- liest Textdateien und listet Ordner im freigegebenen Benutzerverzeichnis;
-- startet den vorhandenen KI-Speichertest;
-- öffnet erlaubte Apps und HTTP(S)-Adressen.
+- zeigt System-, Projekt- und Git-Status und liest freigegebene Textdateien;
+- listet Ordner im freigegebenen Benutzerverzeichnis und startet den KI-Speichertest;
+- öffnet erlaubte Apps und HTTP(S)-Adressen;
+- unterstützt im Pi-Control-AI-Chat bestätigungspflichtige PC-Aktionen;
+- schreibt Dateien mit Sicherung vorhandener Dateien, verschiebt Löschungen in einen Agent-Papierkorb und führt Befehle als Argumentliste ohne Shell-Auswertung aus.
 
-**Noch nicht enthalten:** Verbindung zum Pi-Control-Chat, Dateiänderungen, Löschaktionen oder Maus-/Tastatursteuerung. Der Agent führt keine frei eingegebenen Shell-Befehle aus.
+**Noch nicht enthalten:** sichtbare Maus-/Tastatursteuerung, Administrator-/Root-Aktionen und unbestätigte Ausführung. Dateiänderungen, Löschungen und Befehle werden erst nach ausdrücklicher Bestätigung im Pi-Control-UI ausgeführt.
 
 ## Start
 
