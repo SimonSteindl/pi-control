@@ -1890,6 +1890,33 @@ def format_ai_memory_context(user_id):
     return "\n".join(sections)
 
 
+def extract_explicit_memory_request(message):
+    """Return the requested memory text only for an explicit save command."""
+    match = re.match(
+        r"^\s*(?:merk(?:e)?\s+dir|speicher(?:e)?(?:\s+dir)?|remember(?:\s+that|\s+this)?)"
+        r"(?:\s+bitte)?\s*[,:\-]?\s*(.+?)\s*$",
+        str(message or ""),
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return match.group(1).strip() if match else None
+
+
+def is_ai_memory_recall_request(message):
+    """Recognize direct questions about saved memories without relying on the LLM."""
+    text = str(message or "").strip()
+    return bool(re.search(
+        r"\b(?:"
+        r"was\s+(?:hast\s+du\s+dir\s+gemerkt|sollst\s+du\s+dir\s+merken|weißt\s+du\s+über\s+mich)|"
+        r"was\s+(?:steht|ist)\s+in\s+(?:deinem|meinem)\s+gedächtnis|"
+        r"(?:zeig|zeige|liste|nenne|sag)\s+mir\s+(?:(?:deine|meine|gespeicherten)\s+)*(?:erinnerungen|gedächtnis|merksachen)|"
+        r"welche\s+erinnerungen\s+(?:hast\s+du|sind\s+gespeichert)|"
+        r"(?:deine|meine|gespeicherten)\s+erinnerungen"
+        r")\b",
+        text,
+        flags=re.IGNORECASE,
+    ))
+
+
 @app.get("/api/ai/memory")
 @authentication_required()
 def api_ai_memory_list():
@@ -2034,12 +2061,6 @@ def api_pc_agent_action():
 def api_ai_chat():
     """Proxy a bounded chat request to the administrator-configured Ollama host."""
     ollama_base = os.environ.get("PI_CONTROL_OLLAMA_URL", "").strip().rstrip("/")
-    if not ollama_base:
-        return jsonify({
-            "ok": False,
-            "error": "KI ist noch nicht verbunden. Bitte zuerst PI_CONTROL_OLLAMA_URL konfigurieren.",
-            "code": "ai_not_configured",
-        }), 503
 
     payload = request.get_json(silent=True) or {}
     model = str(payload.get("model") or "qwen3:1.7b").strip()
@@ -2082,22 +2103,50 @@ def api_ai_chat():
             content = content[:4000]
         messages.append({"role": role, "content": content})
 
-    # Save memories only when the user explicitly asks the assistant to remember them.
-    latest_user_message = messages[-1]["content"] if messages and messages[-1]["role"] == "user" else ""
-    remember_match = re.match(
-        r"^\s*(?:merk(?:e)?\s+dir|speicher(?:e)?(?:\s+dir)?|remember(?:\s+that|\s+this)?)"
-        r"(?:\s+bitte)?\s*[,:\-]?\s*(.+?)\s*$",
-        latest_user_message,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    if remember_match:
-        memory_text = remember_match.group(1).strip()
-        saved, _memory_error = save_ai_memory(current_user_id(), memory_text)
-        if saved:
-            app.logger.info("Pi-Control AI hat eine explizite Erinnerung gespeichert")
-
     if len(messages) < 2 or messages[-1]["role"] != "user":
         return jsonify({"ok": False, "error": "Die letzte Nachricht muss eine Frage sein."}), 400
+
+    latest_user_message = messages[-1]["content"]
+
+    # Memory writes and reads are handled deterministically by the server. A
+    # small language model must not be able to claim a save succeeded when it
+    # failed, or deny access to memories that are already stored.
+    memory_text = extract_explicit_memory_request(latest_user_message)
+    if memory_text is not None:
+        saved, memory_error = save_ai_memory(current_user_id(), memory_text)
+        if not saved:
+            return jsonify({"ok": False, "error": memory_error, "code": "memory_rejected"}), 400
+        write_audit("ai.memory.save", "project-memory", {"length": len(memory_text)})
+        return jsonify({
+            "ok": True,
+            "model": model,
+            "message": {
+                "role": "assistant",
+                "content": f"Alles klar – ich habe mir gemerkt: {memory_text}",
+            },
+        })
+
+    if is_ai_memory_recall_request(latest_user_message):
+        memories = get_ai_memories(current_user_id(), limit=20)
+        if memories:
+            answer = "Ich habe mir Folgendes gemerkt:\n" + "\n".join(
+                f"- {item['memory']}" for item in memories
+            )
+        else:
+            answer = "Ich habe noch keine Erinnerungen gespeichert."
+        write_audit("ai.memory.recall", "project-memory", {"count": len(memories)})
+        return jsonify({
+            "ok": True,
+            "model": model,
+            "message": {"role": "assistant", "content": answer},
+        })
+
+    if not ollama_base:
+        return jsonify({
+            "ok": False,
+            "error": "KI ist noch nicht verbunden. Bitte zuerst PI_CONTROL_OLLAMA_URL konfigurieren.",
+            "code": "ai_not_configured",
+        }), 503
 
     chat_request = {
         "model": model,
