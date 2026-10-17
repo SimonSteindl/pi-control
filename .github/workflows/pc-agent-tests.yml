@@ -31,3 +31,17 @@ jobs:
           python pc-agent/agent.py info
           python pc-agent/agent.py status
           python pc-agent/test_local_api.py
+      - name: Set up Flutter for app build
+        if: hashFiles('app/pubspec.yaml') != ''
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.0'
+          cache: true
+      - name: Install Flutter app dependencies
+        if: hashFiles('app/pubspec.yaml') != ''
+        working-directory: app
+        run: flutter pub get --enforce-lockfile
+      - name: Build Android app
+        if: hashFiles('app/pubspec.yaml') != ''
+        working-directory: app
+        run: flutter build apk --release
