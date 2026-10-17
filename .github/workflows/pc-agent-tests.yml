@@ -46,3 +46,11 @@ jobs:
         if: hashFiles('app/pubspec.yaml') != ''
         working-directory: app
         run: flutter build apk --release
+      - name: Upload Android APK
+        if: hashFiles('app/pubspec.yaml') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pi-Control-APK
+          path: app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
