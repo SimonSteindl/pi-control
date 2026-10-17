@@ -85,6 +85,12 @@ class AiMemoryTests(unittest.TestCase):
             self.server.is_ai_memory_recall_request("Wie warm ist mein Raspberry Pi?")
         )
 
+    def test_pc_action_detector_only_matches_direct_commands(self):
+        self.assertTrue(self.server.is_explicit_pc_action_request("Öffne den Browser"))
+        self.assertTrue(self.server.is_explicit_pc_action_request("Bitte starte den Editor"))
+        self.assertFalse(self.server.is_explicit_pc_action_request("Wie öffne ich den Browser?"))
+        self.assertFalse(self.server.is_explicit_pc_action_request("Erkläre mir den PC-Agent"))
+
 
 if __name__ == "__main__":
     unittest.main()
