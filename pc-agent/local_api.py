@@ -7,7 +7,9 @@ import json
 import os
 import platform
 import secrets
+import shutil
 import subprocess
+import time
 import sys
 import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,9 +18,12 @@ from urllib.parse import parse_qs, urlparse
 
 PORT = 8765
 ALLOWED_ORIGINS = {"https://pi-control-dashboard.steindlsimon12.workers.dev"}
-MAX_BODY = 4096
+MAX_BODY = 1_100_000
 MAX_FILE_BYTES = 1_000_000
 MAX_DIRECTORY_ENTRIES = 300
+MAX_WRITE_BYTES = 1_000_000
+MAX_COMMAND_SECONDS = 120
+MAX_COMMAND_OUTPUT_BYTES = 20_000
 
 # Keep private credentials out of routine AI file access.
 SENSITIVE_PARTS = {
@@ -69,6 +74,8 @@ def resolve_user_path(access_root: Path, supplied: str) -> Path:
     candidate = Path(supplied).expanduser()
     if not candidate.is_absolute():
         candidate = access_root / candidate
+    if candidate.is_symlink():
+        raise ValueError("Symbolische Links dürfen nicht verändert werden.")
     target = candidate.resolve()
     if target != access_root and access_root not in target.parents:
         raise ValueError("Zugriff außerhalb des freigegebenen Benutzerordners ist gesperrt.")
@@ -169,8 +176,13 @@ class AgentHandler(BaseHTTPRequestHandler):
 
     def authorized(self) -> bool:
         host = self.headers.get("Host", "")
-        if host not in {"127.0.0.1:8765", "localhost:8765"}:
-            self.send_json(403, {"ok": False, "error": "Nur lokale Host-Header sind erlaubt."})
+        allowed_hosts = {f"{self.server.bind_host}:{PORT}", "127.0.0.1:8765", "localhost:8765"}
+        if host not in allowed_hosts:
+            self.send_json(403, {"ok": False, "error": "Host-Header nicht erlaubt."})
+            return False
+        client_ip = self.client_address[0]
+        if client_ip not in self.server.allowed_clients:
+            self.send_json(403, {"ok": False, "error": "Client-IP ist nicht freigegeben."})
             return False
         supplied = self.headers.get("Authorization", "")
         if not supplied.startswith("Bearer ") or not secrets.compare_digest(supplied[7:].strip(), self.server.token):
@@ -194,7 +206,9 @@ class AgentHandler(BaseHTTPRequestHandler):
                     ["git", "--version"], stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL, check=False,
                 ).returncode == 0,
-                "allowed_actions": ["status", "diff", "read", "list", "tests", "open"],
+                "allowed_actions": ["status", "diff", "read", "list", "tests", "open", "write_file", "trash_file", "run_command"],
+                "bind_host": self.server.bind_host,
+                "allowed_clients": sorted(self.server.allowed_clients),
             })
             return
         if parsed.path == "/v1/git/status":
@@ -273,6 +287,114 @@ class AgentHandler(BaseHTTPRequestHandler):
             except (OSError, ValueError) as exc:
                 self.send_json(400, {"ok": False, "error": str(exc)[:300]})
             return
+        if parsed.path == "/v1/file/write":
+            try:
+                if body.get("approved") is not True:
+                    raise PermissionError("Dateiänderung benötigt eine ausdrückliche Bestätigung.")
+                supplied = body.get("path")
+                content = body.get("content")
+                if not isinstance(supplied, str) or not isinstance(content, str):
+                    raise ValueError("path und content müssen Text sein.")
+                encoded = content.encode("utf-8")
+                if len(encoded) > MAX_WRITE_BYTES:
+                    raise ValueError("Datei ist größer als das Limit von 1 MB.")
+                target = resolve_user_path(self.access_root, supplied)
+                if target == self.access_root:
+                    raise ValueError("Der freigegebene Stammordner kann nicht überschrieben werden.")
+                if target.exists() and not target.is_file():
+                    raise ValueError("Ziel ist keine normale Datei.")
+                parent = target.parent.resolve()
+                if parent != self.access_root and self.access_root not in parent.parents:
+                    raise ValueError("Zielordner liegt außerhalb des freigegebenen Bereichs.")
+                if not parent.is_dir():
+                    raise ValueError("Der Zielordner existiert nicht.")
+                backup_path = None
+                if target.exists():
+                    backup_root = Path.home() / ".pi-control-agent" / "backups"
+                    backup_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    try:
+                        os.chmod(backup_root, 0o700)
+                    except OSError:
+                        pass
+                    backup_path = backup_root / f"{int(time.time())}-{secrets.token_hex(4)}-{target.name}"
+                    shutil.copy2(target, backup_path)
+                fd, temporary = tempfile.mkstemp(prefix=".pi-control-write-", dir=parent)
+                try:
+                    with os.fdopen(fd, "wb") as handle:
+                        handle.write(encoded)
+                    if target.exists():
+                        os.chmod(temporary, target.stat().st_mode & 0o777)
+                    os.replace(temporary, target)
+                finally:
+                    try:
+                        os.unlink(temporary)
+                    except FileNotFoundError:
+                        pass
+                self.send_json(200, {"ok": True, "path": str(target), "bytes_written": len(encoded), "backup": str(backup_path) if backup_path else None})
+            except PermissionError as exc:
+                self.send_json(403, {"ok": False, "error": str(exc)})
+            except (OSError, UnicodeError, ValueError) as exc:
+                self.send_json(400, {"ok": False, "error": str(exc)[:300]})
+            return
+        if parsed.path == "/v1/file/delete":
+            try:
+                if body.get("approved") is not True:
+                    raise PermissionError("Löschen benötigt eine ausdrückliche Bestätigung.")
+                supplied = body.get("path")
+                if not isinstance(supplied, str):
+                    raise ValueError("path muss Text sein.")
+                target = resolve_user_path(self.access_root, supplied)
+                if target == self.access_root:
+                    raise ValueError("Der freigegebene Stammordner kann nicht gelöscht werden.")
+                if not target.exists() or not (target.is_file() or target.is_dir()):
+                    raise ValueError("Ziel nicht gefunden oder nicht unterstützt.")
+                trash_root = Path.home() / ".pi-control-agent" / "trash"
+                trash_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+                try:
+                    os.chmod(trash_root, 0o700)
+                except OSError:
+                    pass
+                trash_target = trash_root / f"{int(time.time())}-{secrets.token_hex(4)}-{target.name}"
+                shutil.move(str(target), str(trash_target))
+                self.send_json(200, {"ok": True, "original_path": str(target), "trash_path": str(trash_target)})
+            except PermissionError as exc:
+                self.send_json(403, {"ok": False, "error": str(exc)})
+            except (OSError, ValueError) as exc:
+                self.send_json(400, {"ok": False, "error": str(exc)[:300]})
+            return
+        if parsed.path == "/v1/command":
+            try:
+                if body.get("approved") is not True:
+                    raise PermissionError("Befehle benötigen eine ausdrückliche Bestätigung.")
+                command = body.get("command")
+                if (not isinstance(command, list) or not command or len(command) > 100
+                        or any(not isinstance(arg, str) or len(arg) > 2000 for arg in command)):
+                    raise ValueError("command muss eine Liste kurzer Textargumente sein.")
+                timeout = body.get("timeout", 30)
+                if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= MAX_COMMAND_SECONDS:
+                    raise ValueError(f"timeout muss zwischen 1 und {MAX_COMMAND_SECONDS} Sekunden liegen.")
+                cwd_value = body.get("cwd", str(self.workspace))
+                if not isinstance(cwd_value, str):
+                    raise ValueError("cwd muss Text sein.")
+                cwd = resolve_user_path(self.access_root, cwd_value)
+                if not cwd.is_dir():
+                    raise ValueError("Arbeitsverzeichnis ist kein Ordner.")
+                result = subprocess.run(
+                    command, cwd=cwd, text=True, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, timeout=timeout, check=False, shell=False,
+                )
+                output = result.stdout[-MAX_COMMAND_OUTPUT_BYTES:]
+                self.send_json(200, {"ok": result.returncode == 0, "exit_code": result.returncode, "output": output, "truncated": len(result.stdout) > MAX_COMMAND_OUTPUT_BYTES})
+            except PermissionError as exc:
+                self.send_json(403, {"ok": False, "error": str(exc)})
+            except subprocess.TimeoutExpired as exc:
+                output = exc.stdout or b""
+                if isinstance(output, bytes):
+                    output = output.decode("utf-8", errors="replace")
+                self.send_json(408, {"ok": False, "error": "Befehl hat das Zeitlimit überschritten.", "output": str(output)[-MAX_COMMAND_OUTPUT_BYTES:]})
+            except (OSError, ValueError) as exc:
+                self.send_json(400, {"ok": False, "error": str(exc)[:300]})
+            return
         if parsed.path == "/v1/tests":
             test_file = self.workspace / "server" / "test_ai_memory.py"
             if not test_file.is_file():
@@ -298,6 +420,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Loopback-only Pi-Control local API")
     parser.add_argument("--workspace", required=True, help="Pi-Control-Projektordner für Git- und Testfunktionen")
     parser.add_argument("--access-root", default=str(Path.home()), help="Freigegebener Datei-Stammordner; Standard ist das Benutzerverzeichnis")
+    parser.add_argument("--bind-host", default="127.0.0.1", help="Listener-Adresse; Standard bleibt nur lokal erreichbar")
+    parser.add_argument("--allowed-client", action="append", default=[], help="Exakte erlaubte Client-IP; bei nicht-lokalem Listener verpflichtend")
     args = parser.parse_args()
     workspace = Path(args.workspace).expanduser().resolve()
     access_root = Path(args.access_root).expanduser().resolve()
@@ -307,12 +431,31 @@ def main() -> int:
     if not access_root.is_dir():
         print("Freigegebener Datei-Stammordner nicht gefunden.", file=sys.stderr)
         return 2
+    bind_host = args.bind_host.strip()
+    try:
+        import ipaddress
+        bind_ip = ipaddress.ip_address(bind_host)
+        is_loopback = bind_ip.is_loopback
+        allowed_clients = set(args.allowed_client)
+        for client in allowed_clients:
+            ipaddress.ip_address(client)
+    except ValueError:
+        print("Listener- und Client-Adressen müssen gültige IP-Adressen sein.", file=sys.stderr)
+        return 2
+    if not is_loopback and not allowed_clients:
+        print("Ein Netzwerk-Listener braucht mindestens eine --allowed-client-IP.", file=sys.stderr)
+        return 2
+    if is_loopback:
+        allowed_clients.update({"127.0.0.1", "::1"})
     token = load_or_create_token()
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), AgentHandler)
+    server = ThreadingHTTPServer((bind_host, PORT), AgentHandler)
     server.workspace = workspace
     server.access_root = access_root
     server.token = token
-    print(f"Pi-Control PC-Agent läuft nur lokal auf http://127.0.0.1:{PORT}")
+    server.bind_host = bind_host
+    server.allowed_clients = allowed_clients
+    print(f"Pi-Control PC-Agent lauscht auf http://{bind_host}:{PORT}")
+    print(f"Erlaubte Clients: {', '.join(sorted(allowed_clients))}")
     print(f"Projekt: {workspace}")
     print(f"Dateizugriff: {access_root} (Zugangsdaten-/Schlüsselpfade sind gesperrt)")
     print(f"Token-Datei: {token_path()}")

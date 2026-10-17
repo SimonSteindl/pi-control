@@ -4,12 +4,13 @@ Der Helfer ist für **Windows 11 und Linux (einschließlich CachyOS)** ausgelegt
 
 ## Aktueller Umfang
 
-- zeigt System-, Projekt- und Git-Status;
-- liest Textdateien und listet Ordner im freigegebenen Benutzerverzeichnis;
-- startet den vorhandenen KI-Speichertest;
-- öffnet erlaubte Apps und HTTP(S)-Adressen.
+- zeigt System-, Projekt- und Git-Status und liest freigegebene Textdateien;
+- listet Ordner im freigegebenen Benutzerverzeichnis und startet den KI-Speichertest;
+- öffnet erlaubte Apps und HTTP(S)-Adressen;
+- unterstützt im Pi-Control-AI-Chat bestätigungspflichtige PC-Aktionen;
+- schreibt Dateien mit Sicherung vorhandener Dateien, verschiebt Löschungen in einen Agent-Papierkorb und führt Befehle als Argumentliste ohne Shell-Auswertung aus.
 
-**Noch nicht enthalten:** Verbindung zum Pi-Control-Chat, Dateiänderungen, Löschaktionen oder Maus-/Tastatursteuerung. Der Agent führt keine frei eingegebenen Shell-Befehle aus.
+**Noch nicht enthalten:** sichtbare Maus-/Tastatursteuerung, Administrator-/Root-Aktionen und unbestätigte Ausführung. Dateiänderungen, Löschungen und Befehle werden erst nach ausdrücklicher Bestätigung im Pi-Control-UI ausgeführt.
 
 ## Start
 
@@ -44,9 +45,28 @@ Bekannte Credential-Bereiche und -Dateitypen sind standardmäßig gesperrt, daru
 
 Den freigegebenen Stammordner kann man beim direkten Start von `local_api.py` mit `--access-root PFAD` ändern. Die API bleibt lokal und token-geschützt.
 
-## Nächste Ausbaustufen
+## Aktions-API mit Bestätigung (Chat-Integration im Code, noch nicht auf Geräten aktiviert)
+
+Die lokale API unterstützt zusätzlich:
+- `POST /v1/file/write`: schreibt eine Textdatei bis 1 MB; bestehende Dateien werden vorher gesichert;
+- `POST /v1/file/delete`: verschiebt Dateien/Ordner in den Agent-Papierkorb statt sie endgültig zu löschen;
+- `POST /v1/command`: führt eine Argumentliste ohne Shell-Auswertung aus, maximal 120 Sekunden.
+
+**Jede dieser drei Aktionen verlangt `"approved": true`.** Dieses Flag darf ausschließlich aus einer echten Bestätigung im Pi-Control-UI gesetzt werden; es darf niemals automatisch aus einer KI-Antwort übernommen werden. Die Chat- und Backend-Routen sind in diesem Branch vorbereitet, müssen aber erst auf dem Pi aktualisiert und mit dem Agenten gekoppelt werden.
+
+### Optionale private Tailscale-Anbindung
+
+Standardmäßig bleibt die API ausschließlich auf `127.0.0.1:8765`. Eine Netzwerkschnittstelle darf nur ausdrücklich konfiguriert werden und verlangt eine genaue Client-IP-Allowlist. Beispiel (erst verwenden, wenn der Branch auf dem PC aktualisiert wurde und Pi-Control-Backend/Firewall passend eingerichtet sind):
+
+```bash
+python3 ./pc-agent/agent.py serve --bind-host 100.99.171.96 --allowed-client 100.73.19.27
+```
+
+Dazu muss die Firewall TCP-Port 8765 ausschließlich für die Tailscale-IP des Raspberry Pi erlauben. Auf dem Pi müssen `PI_CONTROL_PC_AGENT_URL=http://100.99.171.96:8765` und `PI_CONTROL_PC_AGENT_TOKEN` gesetzt sein; der Token ist der Inhalt von `~/.pi-control-agent/token` auf dem PC und darf nicht in den Chat oder ins GitHub-Repository kopiert werden. **Keinen Router-Port, ngrok oder öffentlichen Tunnel dafür öffnen.** Der Chat schlägt Aktionen vor, zeigt eine Bestätigung an und führt erst nach Klick auf „Bestätigen & ausführen“ aus. GUI-Maus-/Tastatursteuerung und Administratoraktionen sind noch nicht enthalten.
+
+## Geplante nächste Ausbaustufen
 
 - sichere Verbindung zum Pi-Control-Chat mit ausdrücklicher Geräte-Kopplung;
-- Dateiänderungen als Diff vorschlagen und erst nach Bestätigung anwenden;
-- Maus-/Tastatursteuerung nur lokal, sichtbar und auf ausdrückliche Aktion starten;
-- keine Admin-Aktionen, Installationen oder Löschungen ohne gesonderte Bestätigung.
+- Bestätigungsdialoge für Befehle, Dateiänderungen, Löschungen und Systemaktionen;
+- Maus-/Tastatursteuerung nur sichtbar und auf ausdrückliche Aktion starten;
+- Admin-Aktionen und Installationen nur nach gesonderter Bestätigung.

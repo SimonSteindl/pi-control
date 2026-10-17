@@ -25,10 +25,16 @@ class _AiChatViewState extends State<AiChatView> {
   final TextEditingController _input = TextEditingController();
   final ScrollController _scroll = ScrollController();
   final List<Map<String, String>> _messages = [];
+  final Map<int, Map<String, dynamic>> _actionRequests = {};
+  final Map<int, String> _actionResults = {};
+  final Set<int> _actionBusy = {};
   List<Map<String, dynamic>> _memories = [];
   String _model = 'qwen3:1.7b';
   bool _busy = false;
   bool _loadingMemories = false;
+  bool _checkingPcAgent = false;
+  bool? _pcAgentConnected;
+  String? _pcAgentStatusText;
   String? _error;
   static const String _chatStorageKey = 'pi_control_ai_chat_messages';
 
@@ -39,6 +45,7 @@ class _AiChatViewState extends State<AiChatView> {
     super.initState();
     _restoreChat();
     _loadMemories();
+    _loadPcAgentStatus();
   }
 
   @override
@@ -105,6 +112,36 @@ class _AiChatViewState extends State<AiChatView> {
     }
   }
 
+  Future<void> _loadPcAgentStatus() async {
+    if (_checkingPcAgent) return;
+    setState(() => _checkingPcAgent = true);
+    try {
+      final response = await widget.client.get(
+        'pc-agent/status',
+        timeout: const Duration(seconds: 10),
+      );
+      final data = widget.client.decodeObject(response);
+      if (!mounted) return;
+      final connected = response.statusCode == 200 && data['ok'] == true;
+      setState(() {
+        _pcAgentConnected = connected;
+        _pcAgentStatusText = connected
+            ? (_en ? 'PC-Agent connected' : 'PC-Agent verbunden')
+            : (data['error']?.toString() ??
+                (_en ? 'PC-Agent not connected' : 'PC-Agent nicht verbunden'));
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _pcAgentConnected = false;
+          _pcAgentStatusText = error.toString();
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _checkingPcAgent = false);
+    }
+  }
+
   Future<void> _send() async {
     final text = _input.text.trim();
     if (text.isEmpty || _busy) return;
@@ -142,7 +179,14 @@ class _AiChatViewState extends State<AiChatView> {
         throw ApiException(_en ? 'The AI returned an empty answer.' : 'Die KI hat keine Antwort geliefert.');
       }
       if (!mounted) return;
-      setState(() => _messages.add({'role': 'assistant', 'content': content.trim()}));
+      setState(() {
+        final index = _messages.length;
+        _messages.add({'role': 'assistant', 'content': content.trim()});
+        final action = data['action_request'];
+        if (action is Map) {
+          _actionRequests[index] = Map<String, dynamic>.from(action);
+        }
+      });
       await _saveChat();
       if (RegExp(r'^\s*(merk(?:e)?\s+dir|speicher|remember)', caseSensitive: false).hasMatch(text)) {
         await _loadMemories();
@@ -152,6 +196,86 @@ class _AiChatViewState extends State<AiChatView> {
       if (mounted) setState(() => _error = error.toString());
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  String _actionTitle(Map<String, dynamic> action) {
+    final type = '${action['action'] ?? ''}';
+    if (_en) {
+      switch (type) {
+        case 'write_file': return 'Write or replace a file';
+        case 'delete_file': return 'Move file/folder to agent trash';
+        case 'run_command': return 'Run command on your PC';
+        case 'open': return 'Open an application';
+      }
+      return 'PC action';
+    }
+    switch (type) {
+      case 'write_file': return 'Datei schreiben/überschreiben';
+      case 'delete_file': return 'Datei/Ordner in den Agent-Papierkorb verschieben';
+      case 'run_command': return 'Befehl auf deinem PC ausführen';
+      case 'open': return 'Programm öffnen';
+    }
+    return 'PC-Aktion';
+  }
+
+  String _actionDetails(Map<String, dynamic> action) {
+    final type = '${action['action'] ?? ''}';
+    if (type == 'run_command') {
+      final command = action['command'];
+      return command is List ? jsonEncode(command) : '$command';
+    }
+    if (type == 'write_file') {
+      final content = '${action['content'] ?? ''}';
+      return 'Pfad: ${action['path'] ?? ''}\n\nVollständiger Inhalt:\n$content';
+    }
+    if (type == 'delete_file') return 'Pfad: ${action['path'] ?? ''}\n\nDer Eintrag wird in den Agent-Papierkorb verschoben, nicht sofort endgültig gelöscht.';
+    if (type == 'open') return 'Programm: ${action['app'] ?? ''}';
+    return '${action['path'] ?? ''}';
+  }
+
+  Future<void> _rejectAction(int index) async {
+    if (!mounted) return;
+    setState(() {
+      _actionRequests.remove(index);
+      _actionResults[index] = _en ? 'Rejected. Nothing was executed.' : 'Abgelehnt. Es wurde nichts ausgeführt.';
+    });
+  }
+
+  Future<void> _approveAction(int index) async {
+    final action = _actionRequests[index];
+    if (action == null || _actionBusy.contains(index)) return;
+    setState(() => _actionBusy.add(index));
+    try {
+      final payload = Map<String, dynamic>.from(action)..['approved'] = true;
+      final response = await widget.client.post(
+        'pc-agent/action',
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+        timeout: const Duration(seconds: 140),
+      );
+      final data = widget.client.decodeObject(response);
+      if (response.statusCode != 200 || data['ok'] != true) {
+        throw ApiException('${data['error'] ?? (_en ? 'PC action failed.' : 'PC-Aktion fehlgeschlagen.')}');
+      }
+      final result = (data['output']?.toString().trim().isNotEmpty ?? false)
+          ? data['output'].toString()
+          : JsonEncoder.withIndent('  ').convert(data);
+      if (!mounted) return;
+      setState(() {
+        _actionRequests.remove(index);
+        _actionResults[index] = result.length > 5000 ? '${result.substring(0, 5000)}…' : result;
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _actionRequests.remove(index);
+          _actionResults[index] = '${_en ? 'Action failed' : 'Aktion fehlgeschlagen'}: $error';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _actionBusy.remove(index));
+      _scrollToBottom();
     }
   }
 
@@ -263,8 +387,11 @@ class _AiChatViewState extends State<AiChatView> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.all(16),
+    return SafeArea(
+      top: false,
+      bottom: true,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -291,6 +418,25 @@ class _AiChatViewState extends State<AiChatView> {
                         Text(_en ? 'Private assistant' : 'Dein privater Assistent', style: theme.textTheme.bodySmall),
                       ],
                     ),
+                  ),
+                  IconButton(
+                    tooltip: _pcAgentStatusText ??
+                        (_en ? 'Check PC-Agent connection' : 'PC-Agent-Verbindung prüfen'),
+                    onPressed: _checkingPcAgent ? null : _loadPcAgentStatus,
+                    icon: _checkingPcAgent
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(
+                            Icons.computer_rounded,
+                            color: _pcAgentConnected == true
+                                ? Colors.green
+                                : _pcAgentConnected == false
+                                    ? theme.colorScheme.error
+                                    : null,
+                          ),
                   ),
                   IconButton(
                     tooltip: _en ? 'Saved memories' : 'Erinnerungen',
@@ -325,6 +471,9 @@ class _AiChatViewState extends State<AiChatView> {
                 onPressed: _busy || _messages.isEmpty ? null : () async {
                   setState(() {
                     _messages.clear();
+                    _actionRequests.clear();
+                    _actionResults.clear();
+                    _actionBusy.clear();
                     _error = null;
                   });
                   await _saveChat();
@@ -394,7 +543,74 @@ class _AiChatViewState extends State<AiChatView> {
                                 : theme.colorScheme.surfaceContainerHighest,
                             child: Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                              child: SelectableText.rich(_formatMessage(message['content'] ?? '', theme.textTheme.bodyMedium)),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  SelectableText.rich(_formatMessage(message['content'] ?? '', theme.textTheme.bodyMedium)),
+                                  if (_actionRequests.containsKey(index)) ...[
+                                    const SizedBox(height: 12),
+                                    Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        border: Border.all(color: theme.colorScheme.error.withValues(alpha: 0.55)),
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Icon(Icons.warning_amber_rounded, color: theme.colorScheme.error),
+                                              const SizedBox(width: 8),
+                                              Expanded(child: Text(_actionTitle(_actionRequests[index]!), style: theme.textTheme.titleSmall)),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 8),
+                                          SelectableText(_actionDetails(_actionRequests[index]!)),
+                                          const SizedBox(height: 10),
+                                          Text(
+                                            _en
+                                                ? 'This action will not run unless you approve it.'
+                                                : 'Diese Aktion wird erst nach deiner Bestätigung ausgeführt.',
+                                            style: theme.textTheme.bodySmall,
+                                          ),
+                                          const SizedBox(height: 10),
+                                          Row(
+                                            mainAxisAlignment: MainAxisAlignment.end,
+                                            children: [
+                                              TextButton(
+                                                onPressed: _actionBusy.contains(index) ? null : () => _rejectAction(index),
+                                                child: Text(_en ? 'Reject' : 'Ablehnen'),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              FilledButton.icon(
+                                                onPressed: _actionBusy.contains(index) ? null : () => _approveAction(index),
+                                                icon: _actionBusy.contains(index)
+                                                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                                                    : const Icon(Icons.check_rounded),
+                                                label: Text(_en ? 'Approve and run' : 'Bestätigen & ausführen'),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                  if (_actionResults.containsKey(index)) ...[
+                                    const SizedBox(height: 10),
+                                    Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.all(10),
+                                      decoration: BoxDecoration(
+                                        color: theme.colorScheme.surface,
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: SelectableText(_actionResults[index]!),
+                                    ),
+                                  ],
+                                ],
+                              ),
                             ),
                           ),
                         ),
@@ -429,6 +645,7 @@ class _AiChatViewState extends State<AiChatView> {
             ],
           ),
         ],
+      ),
       ),
     );
   }
