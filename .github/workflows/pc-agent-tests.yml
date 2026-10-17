@@ -30,6 +30,7 @@ jobs:
         run: |
           python pc-agent/agent.py info
           python pc-agent/agent.py status
+          python pc-agent/agent.py serve --help
           python pc-agent/test_local_api.py
       - name: Set up Flutter for app build
         if: hashFiles('app/pubspec.yaml') != ''
