@@ -1917,6 +1917,21 @@ def is_ai_memory_recall_request(message):
     ))
 
 
+def is_explicit_pc_action_request(message):
+    """Recognize direct action requests, not how-to questions about the PC."""
+    text = str(message or "").strip()
+    return bool(re.match(
+        r"^(?:(?:bitte|hey)\s+)?(?:"
+        r"öffne|oeffne|starte|schließe|schliesse|beende|installiere|deinstalliere|"
+        r"führe\s+aus|fuehre\s+aus|lösche|loesche|erstelle|schreibe|ändere|aendere|"
+        r"bearbeite|kopiere|verschiebe|benenne\s+um|aktualisiere|richte\s+ein|"
+        r"öffne\s+mir|oeffne\s+mir"
+        r")\b",
+        text,
+        flags=re.IGNORECASE,
+    ))
+
+
 @app.get("/api/ai/memory")
 @authentication_required()
 def api_ai_memory_list():
@@ -2139,6 +2154,21 @@ def api_ai_chat():
             "ok": True,
             "model": model,
             "message": {"role": "assistant", "content": answer},
+        })
+
+    if is_explicit_pc_action_request(latest_user_message) and not pc_agent_enabled:
+        if not bool(g.auth_user and g.auth_user["is_admin"]):
+            explanation = "PC-Steuerung ist nur für Administratoren verfügbar."
+        else:
+            explanation = (
+                "Die PC-Steuerung ist noch nicht gekoppelt. Der PC-Agent muss auf deinem "
+                "CachyOS-PC laufen und PI_CONTROL_PC_AGENT_URL sowie PI_CONTROL_PC_AGENT_TOKEN "
+                "müssen am Raspberry Pi eingerichtet sein. Es wurde nichts auf dem PC ausgeführt."
+            )
+        return jsonify({
+            "ok": True,
+            "model": model,
+            "message": {"role": "assistant", "content": explanation},
         })
 
     if not ollama_base:
