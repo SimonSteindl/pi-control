@@ -32,6 +32,9 @@ class _AiChatViewState extends State<AiChatView> {
   String _model = 'qwen3:1.7b';
   bool _busy = false;
   bool _loadingMemories = false;
+  bool _checkingPcAgent = false;
+  bool? _pcAgentConnected;
+  String? _pcAgentStatusText;
   String? _error;
   static const String _chatStorageKey = 'pi_control_ai_chat_messages';
 
@@ -42,6 +45,7 @@ class _AiChatViewState extends State<AiChatView> {
     super.initState();
     _restoreChat();
     _loadMemories();
+    _loadPcAgentStatus();
   }
 
   @override
@@ -105,6 +109,36 @@ class _AiChatViewState extends State<AiChatView> {
       if (mounted) setState(() => _error = error.toString());
     } finally {
       if (mounted) setState(() => _loadingMemories = false);
+    }
+  }
+
+  Future<void> _loadPcAgentStatus() async {
+    if (_checkingPcAgent) return;
+    setState(() => _checkingPcAgent = true);
+    try {
+      final response = await widget.client.get(
+        'pc-agent/status',
+        timeout: const Duration(seconds: 10),
+      );
+      final data = widget.client.decodeObject(response);
+      if (!mounted) return;
+      final connected = response.statusCode == 200 && data['ok'] == true;
+      setState(() {
+        _pcAgentConnected = connected;
+        _pcAgentStatusText = connected
+            ? (_en ? 'PC-Agent connected' : 'PC-Agent verbunden')
+            : (data['error']?.toString() ??
+                (_en ? 'PC-Agent not connected' : 'PC-Agent nicht verbunden'));
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _pcAgentConnected = false;
+          _pcAgentStatusText = error.toString();
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _checkingPcAgent = false);
     }
   }
 
@@ -384,6 +418,25 @@ class _AiChatViewState extends State<AiChatView> {
                         Text(_en ? 'Private assistant' : 'Dein privater Assistent', style: theme.textTheme.bodySmall),
                       ],
                     ),
+                  ),
+                  IconButton(
+                    tooltip: _pcAgentStatusText ??
+                        (_en ? 'Check PC-Agent connection' : 'PC-Agent-Verbindung prüfen'),
+                    onPressed: _checkingPcAgent ? null : _loadPcAgentStatus,
+                    icon: _checkingPcAgent
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(
+                            Icons.computer_rounded,
+                            color: _pcAgentConnected == true
+                                ? Colors.green
+                                : _pcAgentConnected == false
+                                    ? theme.colorScheme.error
+                                    : null,
+                          ),
                   ),
                   IconButton(
                     tooltip: _en ? 'Saved memories' : 'Erinnerungen',
