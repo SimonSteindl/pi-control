@@ -48,5 +48,24 @@ class LocalApiSafetyTests(unittest.TestCase):
         self.assertIn('".pi-control-agent" / "trash"', source)
 
 
+    def test_command_allowlist_contains_only_exact_commands(self):
+        allowed = MODULE.ALLOWED_COMMANDS
+
+        self.assertIn(("whoami",), allowed)
+        self.assertIn(("uname", "-a"), allowed)
+        self.assertNotIn(("python", "-c", "print(1)"), allowed)
+        self.assertNotIn(("rm", "-rf", "/"), allowed)
+
+    def test_command_allowlist_rejects_extra_arguments(self):
+        allowed = MODULE.ALLOWED_COMMANDS
+
+        self.assertNotIn(("whoami", "extra"), allowed)
+        self.assertNotIn(("df", "-h", "/"), allowed)
+    def test_command_allowlist_is_checked_before_execution(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        route = source.split('parsed.path == "/v1/command":', 1)[1]
+        allowlist_check = route.index("tuple(command) not in ALLOWED_COMMANDS")
+        execution = route.index("subprocess.run(")
+        self.assertLess(allowlist_check, execution)
 if __name__ == "__main__":
     unittest.main()

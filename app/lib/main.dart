@@ -16,6 +16,7 @@ import 'package:http/http.dart' as http;
 import 'auth.dart';
 import 'ai_chat_view.dart';
 import 'file_manager_view.dart';
+import 'pc_agent_view.dart';
 import 'feature_hub_view.dart';
 import 'login_views.dart';
 import 'layout_system.dart';
@@ -413,10 +414,10 @@ class _DashboardPageState extends State<DashboardPage>
         ? candidateParts.length
         : currentParts.length;
     for (var index = 0; index < length; index++) {
-      final candidatePart =
-          index < candidateParts.length ? candidateParts[index] : 0;
-      final currentPart =
-          index < currentParts.length ? currentParts[index] : 0;
+      final candidatePart = index < candidateParts.length
+          ? candidateParts[index]
+          : 0;
+      final currentPart = index < currentParts.length ? currentParts[index] : 0;
       if (candidatePart != currentPart) return candidatePart > currentPart;
     }
     return false;
@@ -971,7 +972,9 @@ class _DashboardPageState extends State<DashboardPage>
             'Bitte 10 Sekunden warten und den Status erneut prüfen.',
           );
         }
-        throw Exception('Ungültige Serverantwort (HTTP ${response.statusCode}).');
+        throw Exception(
+          'Ungültige Serverantwort (HTTP ${response.statusCode}).',
+        );
       }
 
       if (response.statusCode != 200) {
@@ -1370,6 +1373,7 @@ class _DashboardPageState extends State<DashboardPage>
       if (widget.session.can('files_view')) 'files',
       if (widget.session.can('terminal_access')) 'terminal',
       if (widget.session.can('users_manage')) 'users',
+      if (widget.session.isAdmin) 'pc-agent',
       'more',
     ];
     final currentPageIndex = selectedPageIndex.clamp(0, pageKeys.length - 1);
@@ -1381,6 +1385,7 @@ class _DashboardPageState extends State<DashboardPage>
       'files' => english ? 'Files' : 'Dateimanager',
       'terminal' => 'Terminal',
       'users' => english ? 'Admin panel' : 'Admin-Panel',
+      'pc-agent' => english ? 'PC Control' : 'PC-Steuerung',
       'more' => english ? 'More' : 'Mehr',
       _ => english ? "Stoney's Raspberry Pi" : 'Stoneys Raspberry Pi',
     };
@@ -1423,6 +1428,12 @@ class _DashboardPageState extends State<DashboardPage>
             label: 'Admin',
             icon: Icons.admin_panel_settings_outlined,
             selectedIcon: Icons.admin_panel_settings_rounded,
+          ),
+          'pc-agent' => PiNavigationItem(
+            keyName: key,
+            label: english ? 'PC Control' : 'PC-Steuerung',
+            icon: Icons.computer_outlined,
+            selectedIcon: Icons.computer_rounded,
           ),
           _ => PiNavigationItem(
             keyName: key,
@@ -2244,6 +2255,22 @@ class _DashboardPageState extends State<DashboardPage>
                         session: widget.session,
                         onSessionUpdated: widget.onSessionUpdated,
                         accentColor: widget.accentColor,
+                      ),
+                    if (widget.session.isAdmin)
+                      PcAgentView(
+                        accentColor: widget.accentColor,
+                        english: english,
+                        apiGet: (path, headers, timeout) => _apiGet(
+                          path,
+                          headers: headers,
+                          timeout: timeout ?? const Duration(seconds: 15),
+                        ),
+                        apiPost: (path, headers, body, timeout) => _apiPost(
+                          path,
+                          headers: headers,
+                          body: body,
+                          timeout: timeout ?? const Duration(seconds: 140),
+                        ),
                       ),
                     FeatureHubView(
                       client: widget.client,

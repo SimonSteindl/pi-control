@@ -24,6 +24,14 @@ MAX_DIRECTORY_ENTRIES = 300
 MAX_WRITE_BYTES = 1_000_000
 MAX_COMMAND_SECONDS = 120
 MAX_COMMAND_OUTPUT_BYTES = 20_000
+# Only exact, read-only diagnostic commands are allowed.
+ALLOWED_COMMANDS = {
+    ("whoami",),
+    ("uname", "-a"),
+    ("uptime",),
+    ("df", "-h"),
+    ("free", "-h"),
+}
 
 # Keep private credentials out of routine AI file access.
 SENSITIVE_PARTS = {
@@ -370,6 +378,10 @@ class AgentHandler(BaseHTTPRequestHandler):
                 if (not isinstance(command, list) or not command or len(command) > 100
                         or any(not isinstance(arg, str) or len(arg) > 2000 for arg in command)):
                     raise ValueError("command muss eine Liste kurzer Textargumente sein.")
+                if tuple(command) not in ALLOWED_COMMANDS:
+                    raise PermissionError(
+                        "Dieser Befehl ist nicht freigegeben."
+                    )
                 timeout = body.get("timeout", 30)
                 if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= MAX_COMMAND_SECONDS:
                     raise ValueError(f"timeout muss zwischen 1 und {MAX_COMMAND_SECONDS} Sekunden liegen.")
