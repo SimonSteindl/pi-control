@@ -135,14 +135,14 @@ class _LoginScreenState extends State<LoginScreen> {
     final design = context.piDesign;
     final backgroundColors = switch (design.style) {
       PiLayoutStyle.aurora => [
-        widget.accentColor.withValues(alpha: 0.28),
-        const Color(0xFF0A0F1C),
-        const Color(0xFF070B14),
+        widget.accentColor.withValues(alpha: 0.20),
+        const Color(0xFF101216),
+        const Color(0xFF0B0D11),
       ],
       PiLayoutStyle.commandCenter => const [
-        Color(0xFF111927),
-        Color(0xFF070B12),
-        Color(0xFF05070B),
+        Color(0xFF171A20),
+        Color(0xFF0B0D11),
+        Color(0xFF08090C),
       ],
       PiLayoutStyle.compact => const [
         Color(0xFF171B22),
