@@ -840,6 +840,9 @@ class _FileManagerViewState extends State<FileManagerView> {
     required bool replace,
   }) async {
     final fileLength = await file.length();
+    if (fileLength == null || fileLength < 0) {
+      throw Exception("Dateigröße konnte nicht ermittelt werden.");
+    }
     var uploadedBytes = 0;
     final stopwatch = Stopwatch()..start();
     var lastUpdate = Duration.zero;

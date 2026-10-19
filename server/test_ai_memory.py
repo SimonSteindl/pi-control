@@ -59,6 +59,38 @@ class AiMemoryTests(unittest.TestCase):
         self.assertFalse(saved)
         self.assertIn("1000", error)
 
+    def test_explicit_memory_command_extracts_only_the_requested_text(self):
+        self.assertEqual(
+            self.server.extract_explicit_memory_request("Merk dir 123"),
+            "123",
+        )
+        self.assertEqual(
+            self.server.extract_explicit_memory_request("Merke dir: Pi-Control"),
+            "Pi-Control",
+        )
+        self.assertIsNone(
+            self.server.extract_explicit_memory_request("Was sollst du dir merken?")
+        )
+
+    def test_memory_recall_questions_are_detected_deterministically(self):
+        for prompt in (
+            "Was sollst du dir merken?",
+            "Was hast du dir gemerkt?",
+            "Zeig mir deine Erinnerungen",
+            "Was steht in deinem Gedächtnis?",
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertTrue(self.server.is_ai_memory_recall_request(prompt))
+        self.assertFalse(
+            self.server.is_ai_memory_recall_request("Wie warm ist mein Raspberry Pi?")
+        )
+
+    def test_pc_action_detector_only_matches_direct_commands(self):
+        self.assertTrue(self.server.is_explicit_pc_action_request("Öffne den Browser"))
+        self.assertTrue(self.server.is_explicit_pc_action_request("Bitte starte den Editor"))
+        self.assertFalse(self.server.is_explicit_pc_action_request("Wie öffne ich den Browser?"))
+        self.assertFalse(self.server.is_explicit_pc_action_request("Erkläre mir den PC-Agent"))
+
 
 if __name__ == "__main__":
     unittest.main()

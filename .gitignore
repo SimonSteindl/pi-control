@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.before-*
+wasdwa
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/build/
+app/.idea/
+app/*.iml
+app/pubspec.yaml.before-major-updates

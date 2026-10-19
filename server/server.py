@@ -1890,6 +1890,48 @@ def format_ai_memory_context(user_id):
     return "\n".join(sections)
 
 
+def extract_explicit_memory_request(message):
+    """Return the requested memory text only for an explicit save command."""
+    match = re.match(
+        r"^\s*(?:merk(?:e)?\s+dir|speicher(?:e)?(?:\s+dir)?|remember(?:\s+that|\s+this)?)"
+        r"(?:\s+bitte)?\s*[,:\-]?\s*(.+?)\s*$",
+        str(message or ""),
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return match.group(1).strip() if match else None
+
+
+def is_ai_memory_recall_request(message):
+    """Recognize direct questions about saved memories without relying on the LLM."""
+    text = str(message or "").strip()
+    return bool(re.search(
+        r"\b(?:"
+        r"was\s+(?:hast\s+du\s+dir\s+gemerkt|sollst\s+du\s+dir\s+merken|weißt\s+du\s+über\s+mich)|"
+        r"was\s+(?:steht|ist)\s+in\s+(?:deinem|meinem)\s+gedächtnis|"
+        r"(?:zeig|zeige|liste|nenne|sag)\s+mir\s+(?:(?:deine|meine|gespeicherten)\s+)*(?:erinnerungen|gedächtnis|merksachen)|"
+        r"welche\s+erinnerungen\s+(?:hast\s+du|sind\s+gespeichert)|"
+        r"(?:deine|meine|gespeicherten)\s+erinnerungen"
+        r")\b",
+        text,
+        flags=re.IGNORECASE,
+    ))
+
+
+def is_explicit_pc_action_request(message):
+    """Recognize direct action requests, not how-to questions about the PC."""
+    text = str(message or "").strip()
+    return bool(re.match(
+        r"^(?:(?:bitte|hey)\s+)?(?:"
+        r"öffne|oeffne|starte|schließe|schliesse|beende|installiere|deinstalliere|"
+        r"führe\s+aus|fuehre\s+aus|lösche|loesche|erstelle|schreibe|ändere|aendere|"
+        r"bearbeite|kopiere|verschiebe|benenne\s+um|aktualisiere|richte\s+ein|"
+        r"öffne\s+mir|oeffne\s+mir"
+        r")\b",
+        text,
+        flags=re.IGNORECASE,
+    ))
+
+
 @app.get("/api/ai/memory")
 @authentication_required()
 def api_ai_memory_list():
@@ -1924,17 +1966,116 @@ def api_ai_memory_delete(memory_id):
     return jsonify({"ok": True, "message": "Erinnerung gelöscht."})
 
 
+PC_AGENT_ACTIONS = {"write_file", "delete_file", "run_command", "open"}
+PC_AGENT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "propose_pc_action",
+        "description": "Propose exactly one action on the user's PC only when the user explicitly asks you to do something. The action will NOT run until the user approves it in the UI. Never use this tool just to explain or answer a question.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["write_file", "delete_file", "run_command", "open"]},
+                "summary": {"type": "string"},
+                "path": {"type": "string"},
+                "content": {"type": "string"},
+                "command": {"type": "array", "items": {"type": "string"}},
+                "cwd": {"type": "string"},
+                "timeout": {"type": "integer"},
+                "app": {"type": "string"},
+            },
+            "required": ["action", "summary"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+def pc_agent_request(path, payload=None, timeout=15):
+    base = os.environ.get("PI_CONTROL_PC_AGENT_URL", "").strip().rstrip("/")
+    token = os.environ.get("PI_CONTROL_PC_AGENT_TOKEN", "").strip()
+    if not base or not token:
+        return {"ok": False, "error": "PC-Agent ist nicht gekoppelt."}, 503
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(f"{base}{path}", data=data, headers=headers, method="GET" if data is None else "POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            raw = response.read(256 * 1024).decode("utf-8", errors="replace")
+            result = json.loads(raw) if raw else {}
+            return (result if isinstance(result, dict) else {"ok": False, "error": "Ungültige Agent-Antwort."}), response.status
+    except urllib.error.HTTPError as exc:
+        try:
+            raw = exc.read(64 * 1024).decode("utf-8", errors="replace")
+            result = json.loads(raw) if raw else {}
+        except (OSError, json.JSONDecodeError):
+            result = {}
+        if not isinstance(result, dict):
+            result = {}
+        result.setdefault("ok", False)
+        result.setdefault("error", f"PC-Agent antwortete mit HTTP {exc.code}.")
+        return result, 502
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        app.logger.warning("Pi-Control PC-Agent nicht erreichbar: %s", exc)
+        return {"ok": False, "error": "PC-Agent nicht erreichbar. Prüfe Tailscale, Firewall und Agent-Dienst."}, 502
+
+
+@app.get("/api/pc-agent/status")
+@authentication_required(admin_only=True)
+def api_pc_agent_status():
+    result, status = pc_agent_request("/v1/status")
+    return jsonify(result), status
+
+
+@app.post("/api/pc-agent/action")
+@authentication_required(admin_only=True)
+def api_pc_agent_action():
+    payload = request.get_json(silent=True) or {}
+    if payload.get("approved") is not True:
+        return jsonify({"ok": False, "error": "Die Aktion muss zuerst im UI ausdrücklich bestätigt werden.", "code": "approval_required"}), 403
+    action = str(payload.get("action") or "")
+    if action not in PC_AGENT_ACTIONS:
+        return jsonify({"ok": False, "error": "Diese PC-Aktion ist nicht freigegeben."}), 400
+    agent_payload = {"approved": True}
+    if action in {"write_file", "delete_file"}:
+        path = payload.get("path")
+        if not isinstance(path, str) or not path.strip():
+            return jsonify({"ok": False, "error": "Ein gültiger Dateipfad ist erforderlich."}), 400
+        agent_payload["path"] = path
+        endpoint = "/v1/file/write" if action == "write_file" else "/v1/file/delete"
+        if action == "write_file":
+            content = payload.get("content")
+            if not isinstance(content, str):
+                return jsonify({"ok": False, "error": "Dateiinhalt fehlt."}), 400
+            agent_payload["content"] = content
+    elif action == "run_command":
+        command = payload.get("command")
+        if not isinstance(command, list) or not command or any(not isinstance(part, str) for part in command):
+            return jsonify({"ok": False, "error": "Ein Befehl muss als Argumentliste angegeben werden."}), 400
+        agent_payload["command"] = command
+        if isinstance(payload.get("cwd"), str):
+            agent_payload["cwd"] = payload["cwd"]
+        if isinstance(payload.get("timeout"), int) and not isinstance(payload.get("timeout"), bool):
+            agent_payload["timeout"] = payload["timeout"]
+        endpoint = "/v1/command"
+    else:
+        app_name = payload.get("app")
+        if app_name not in {"editor", "browser", "file-manager"}:
+            return jsonify({"ok": False, "error": "Diese App ist nicht freigegeben."}), 400
+        agent_payload = {"app": app_name}
+        endpoint = "/v1/open"
+    result, status = pc_agent_request(endpoint, agent_payload, timeout=135 if action == "run_command" else 15)
+    write_audit("pc_agent.action", action, {"approved": True, "ok": bool(result.get("ok"))})
+    return jsonify(result), status
+
+
 @app.post("/api/ai/chat")
 @authentication_required()
 def api_ai_chat():
     """Proxy a bounded chat request to the administrator-configured Ollama host."""
     ollama_base = os.environ.get("PI_CONTROL_OLLAMA_URL", "").strip().rstrip("/")
-    if not ollama_base:
-        return jsonify({
-            "ok": False,
-            "error": "KI ist noch nicht verbunden. Bitte zuerst PI_CONTROL_OLLAMA_URL konfigurieren.",
-            "code": "ai_not_configured",
-        }), 503
 
     payload = request.get_json(silent=True) or {}
     model = str(payload.get("model") or "qwen3:1.7b").strip()
@@ -1945,9 +2086,26 @@ def api_ai_chat():
     if not isinstance(raw_messages, list) or not raw_messages:
         return jsonify({"ok": False, "error": "Bitte zuerst eine Frage eingeben."}), 400
 
+    pc_agent_enabled = bool(
+        g.auth_user
+        and bool(g.auth_user["is_admin"])
+        and os.environ.get("PI_CONTROL_PC_AGENT_URL", "").strip()
+        and os.environ.get("PI_CONTROL_PC_AGENT_TOKEN", "").strip()
+    )
+    system_prompt = (
+        "Du bist Pi-Control AI, ein hilfreicher Assistent. Antworte standardmäßig auf Deutsch, klar und verständlich. "
+        "Du hast keinen direkten Zugriff auf den Raspberry Pi oder dessen Live-Daten, außer der Nutzer gibt sie dir im Chat."
+    )
+    if pc_agent_enabled:
+        system_prompt += (
+            "\n\nDu kannst eine PC-Aktion vorschlagen, wenn der Nutzer ausdrücklich möchte, dass du etwas auf seinem CachyOS-PC erledigst. "
+            "Nutze dafür propose_pc_action und genau eine Aktion pro Vorschlag. Die Aktion wird niemals automatisch ausgeführt; "
+            "der Nutzer muss sie im Pi-Control-UI bestätigen. Bei Löschen, Dateiüberschreiben, Befehlen, Installationen oder Systemänderungen "
+            "erkläre klar, was passieren soll. Für reine Fragen und Erklärungen rufe das Tool nicht auf."
+        )
     messages = [{
         "role": "system",
-        "content": "Du bist Pi-Control AI, ein hilfreicher Assistent. Antworte standardmäßig auf Deutsch, klar und verständlich. Du hast keinen direkten Zugriff auf den Raspberry Pi oder dessen Live-Daten, außer der Nutzer gibt sie dir im Chat.\n\n" + format_ai_memory_context(current_user_id()),
+        "content": system_prompt + "\n\n" + format_ai_memory_context(current_user_id()),
     }]
     for item in raw_messages[-12:]:
         if not isinstance(item, dict):
@@ -1960,30 +2118,76 @@ def api_ai_chat():
             content = content[:4000]
         messages.append({"role": role, "content": content})
 
-    # Save memories only when the user explicitly asks the assistant to remember them.
-    latest_user_message = messages[-1]["content"] if messages and messages[-1]["role"] == "user" else ""
-    remember_match = re.match(
-        r"^\s*(?:merk(?:e)?\s+dir|speicher(?:e)?(?:\s+dir)?|remember(?:\s+that|\s+this)?)"
-        r"(?:\s+bitte)?\s*[,:\-]?\s*(.+?)\s*$",
-        latest_user_message,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    if remember_match:
-        memory_text = remember_match.group(1).strip()
-        saved, _memory_error = save_ai_memory(current_user_id(), memory_text)
-        if saved:
-            app.logger.info("Pi-Control AI hat eine explizite Erinnerung gespeichert")
-
     if len(messages) < 2 or messages[-1]["role"] != "user":
         return jsonify({"ok": False, "error": "Die letzte Nachricht muss eine Frage sein."}), 400
 
-    body = json.dumps({
+    latest_user_message = messages[-1]["content"]
+
+    # Memory writes and reads are handled deterministically by the server. A
+    # small language model must not be able to claim a save succeeded when it
+    # failed, or deny access to memories that are already stored.
+    memory_text = extract_explicit_memory_request(latest_user_message)
+    if memory_text is not None:
+        saved, memory_error = save_ai_memory(current_user_id(), memory_text)
+        if not saved:
+            return jsonify({"ok": False, "error": memory_error, "code": "memory_rejected"}), 400
+        write_audit("ai.memory.save", "project-memory", {"length": len(memory_text)})
+        return jsonify({
+            "ok": True,
+            "model": model,
+            "message": {
+                "role": "assistant",
+                "content": f"Alles klar – ich habe mir gemerkt: {memory_text}",
+            },
+        })
+
+    if is_ai_memory_recall_request(latest_user_message):
+        memories = get_ai_memories(current_user_id(), limit=20)
+        if memories:
+            answer = "Ich habe mir Folgendes gemerkt:\n" + "\n".join(
+                f"- {item['memory']}" for item in memories
+            )
+        else:
+            answer = "Ich habe noch keine Erinnerungen gespeichert."
+        write_audit("ai.memory.recall", "project-memory", {"count": len(memories)})
+        return jsonify({
+            "ok": True,
+            "model": model,
+            "message": {"role": "assistant", "content": answer},
+        })
+
+    if is_explicit_pc_action_request(latest_user_message) and not pc_agent_enabled:
+        if not bool(g.auth_user and g.auth_user["is_admin"]):
+            explanation = "PC-Steuerung ist nur für Administratoren verfügbar."
+        else:
+            explanation = (
+                "Die PC-Steuerung ist noch nicht gekoppelt. Der PC-Agent muss auf deinem "
+                "CachyOS-PC laufen und PI_CONTROL_PC_AGENT_URL sowie PI_CONTROL_PC_AGENT_TOKEN "
+                "müssen am Raspberry Pi eingerichtet sein. Es wurde nichts auf dem PC ausgeführt."
+            )
+        return jsonify({
+            "ok": True,
+            "model": model,
+            "message": {"role": "assistant", "content": explanation},
+        })
+
+    if not ollama_base:
+        return jsonify({
+            "ok": False,
+            "error": "KI ist noch nicht verbunden. Bitte zuerst PI_CONTROL_OLLAMA_URL konfigurieren.",
+            "code": "ai_not_configured",
+        }), 503
+
+    chat_request = {
         "model": model,
         "messages": messages,
         "stream": False,
         "think": False,
         "options": {"num_ctx": 4096, "num_predict": 512},
-    }).encode("utf-8")
+    }
+    if pc_agent_enabled:
+        chat_request["tools"] = [PC_AGENT_TOOL]
+    body = json.dumps(chat_request).encode("utf-8")
     req = urllib.request.Request(
         f"{ollama_base}/api/chat",
         data=body,
@@ -2010,6 +2214,53 @@ def api_ai_chat():
 
     message = result.get("message") if isinstance(result, dict) else None
     answer = message.get("content") if isinstance(message, dict) else None
+    tool_calls = message.get("tool_calls") if isinstance(message, dict) else None
+    if isinstance(tool_calls, list) and tool_calls:
+        if len(tool_calls) != 1 or not isinstance(tool_calls[0], dict):
+            return jsonify({"ok": False, "error": "Bitte fordere die PC-Aktionen einzeln an."}), 502
+        call = tool_calls[0].get("function") or {}
+        if call.get("name") != "propose_pc_action":
+            return jsonify({"ok": False, "error": "Die KI hat eine unbekannte Aktion vorgeschlagen."}), 502
+        arguments = call.get("arguments", {})
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = {}
+        if not isinstance(arguments, dict) or arguments.get("action") not in PC_AGENT_ACTIONS:
+            return jsonify({"ok": False, "error": "Die KI hat keine gültige PC-Aktion vorgeschlagen."}), 502
+        action = arguments.get("action")
+        required = {
+            "write_file": ("path", "content"),
+            "delete_file": ("path",),
+            "run_command": ("command",),
+            "open": ("app",),
+        }[action]
+        if any(key not in arguments for key in required):
+            return jsonify({"ok": False, "error": "Der Aktionsvorschlag ist unvollständig."}), 502
+        if action == "write_file" and (
+            not isinstance(arguments.get("content"), str)
+            or len(arguments["content"]) > 20000
+        ):
+            return jsonify({"ok": False, "error": "Die vorgeschlagene Datei ist zu groß für eine vollständige Vorschau. Bitte teile die Aufgabe in kleinere Dateien auf."}), 502
+        if action == "run_command" and (
+            not isinstance(arguments.get("command"), list)
+            or not arguments["command"]
+            or any(not isinstance(part, str) for part in arguments["command"])
+        ):
+            return jsonify({"ok": False, "error": "Der vorgeschlagene Befehl ist ungültig."}), 502
+        if action == "open" and arguments.get("app") not in {"editor", "browser", "file-manager"}:
+            return jsonify({"ok": False, "error": "Die vorgeschlagene App ist nicht freigegeben."}), 502
+        safe_action = {key: arguments[key] for key in ("action", "summary", "path", "content", "command", "cwd", "timeout", "app") if key in arguments}
+        summary = str(safe_action.get("summary") or "Die KI möchte eine Aktion auf deinem PC ausführen.")[:300]
+        write_audit("ai.pc_action.proposed", action, {"summary_length": len(summary)})
+        return jsonify({
+            "ok": True,
+            "model": model,
+            "message": {"role": "assistant", "content": summary},
+            "action_request": safe_action,
+        })
+
     if not isinstance(answer, str) or not answer.strip():
         return jsonify({"ok": False, "error": "Ollama hat keine Antwort geliefert."}), 502
 
