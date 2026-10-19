@@ -43,7 +43,7 @@ class PiControlApp extends StatefulWidget {
 
 class _PiControlAppState extends State<PiControlApp> {
   Color accentColor = const Color(0xFFFF7900);
-  PiLayoutStyle layoutStyle = PiLayoutStyle.commandCenter;
+  PiLayoutStyle layoutStyle = PiLayoutStyle.aurora;
   final PiApiClient client = PiApiClient();
   AuthSession? session;
   bool restoringSession = true;
@@ -289,7 +289,7 @@ class _DashboardPageState extends State<DashboardPage>
   String? androidUpdatePath;
   List<String> dashboardShortcuts = ['files', 'more', 'backups', 'search'];
 
-  static const clientAppVersion = '2.4.3';
+  static const clientAppVersion = '2.5.0';
 
   Future<http.Response> _apiGet(
     String path, {
@@ -2518,15 +2518,15 @@ class DashboardHeroCard extends StatelessWidget {
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
-          accentColor.withValues(alpha: 0.98),
-          colorScheme.tertiary.withValues(alpha: 0.78),
-          const Color(0xFF19223A),
+          accentColor.withValues(alpha: 0.96),
+          const Color(0xFF8F4316),
+          const Color(0xFF171A20),
         ],
       ),
       PiLayoutStyle.commandCenter => const LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
-        colors: [Color(0xFF101827), Color(0xFF0D2029), Color(0xFF111827)],
+        colors: [Color(0xFF171A20), Color(0xFF111419), Color(0xFF0B0D11)],
       ),
       PiLayoutStyle.compact => LinearGradient(
         colors: [const Color(0xFF171D27), accentColor.withValues(alpha: .20)],
