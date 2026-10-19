@@ -11,6 +11,7 @@ import os
 import sqlite3
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -32,11 +33,21 @@ class AgentMemory:
         connection = sqlite3.connect(str(self.db_path), timeout=10)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA busy_timeout = 10000")
+        connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA journal_mode = WAL")
         return connection
 
+    @contextmanager
+    def _db(self):
+        db = self._connect()
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
     def _initialize(self) -> None:
-        with self._connect() as db:
+        with self._db() as db:
             db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -77,7 +88,7 @@ class AgentMemory:
     def start_task(self, title: str, goal: str) -> dict[str, Any]:
         now = time.time()
         task_id = str(uuid.uuid4())
-        with self._connect() as db:
+        with self._db() as db:
             db.execute(
                 """INSERT INTO tasks
                    (id, title, goal, status, created_at, updated_at)
@@ -104,7 +115,7 @@ class AgentMemory:
         if status not in allowed:
             raise ValueError(f"Unsupported task status: {status}")
         now = time.time()
-        with self._connect() as db:
+        with self._db() as db:
             existing = db.execute(
                 "SELECT id FROM tasks WHERE id = ?", (task_id,)
             ).fetchone()
@@ -138,7 +149,7 @@ class AgentMemory:
         )
 
     def current_task(self) -> dict[str, Any] | None:
-        with self._connect() as db:
+        with self._db() as db:
             row = db.execute(
                 """SELECT * FROM tasks WHERE status IN ('in_progress', 'paused')
                    ORDER BY updated_at DESC LIMIT 1"""
@@ -146,14 +157,14 @@ class AgentMemory:
             return self._task(row)
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
-        with self._connect() as db:
+        with self._db() as db:
             return self._task(db.execute(
                 "SELECT * FROM tasks WHERE id = ?", (task_id,)
             ).fetchone())
 
     def task_events(self, task_id: str, limit: int = 100) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit), 500))
-        with self._connect() as db:
+        with self._db() as db:
             rows = db.execute(
                 """SELECT kind, message, details_json, created_at
                    FROM events WHERE task_id = ? ORDER BY id DESC LIMIT ?""",
@@ -168,7 +179,7 @@ class AgentMemory:
 
     def recent_tasks(self, limit: int = 20) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit), 100))
-        with self._connect() as db:
+        with self._db() as db:
             rows = db.execute(
                 "SELECT * FROM tasks ORDER BY updated_at DESC LIMIT ?", (limit,)
             ).fetchall()
