@@ -2518,15 +2518,15 @@ class DashboardHeroCard extends StatelessWidget {
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
-          accentColor.withValues(alpha: 0.98),
-          colorScheme.tertiary.withValues(alpha: 0.78),
-          const Color(0xFF19223A),
+          accentColor.withValues(alpha: 0.96),
+          const Color(0xFF8F4316),
+          const Color(0xFF171A20),
         ],
       ),
       PiLayoutStyle.commandCenter => const LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
-        colors: [Color(0xFF101827), Color(0xFF0D2029), Color(0xFF111827)],
+        colors: [Color(0xFF171A20), Color(0xFF111419), Color(0xFF0B0D11)],
       ),
       PiLayoutStyle.compact => LinearGradient(
         colors: [const Color(0xFF171D27), accentColor.withValues(alpha: .20)],
