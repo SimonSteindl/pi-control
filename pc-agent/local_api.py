@@ -154,6 +154,10 @@ class AgentHandler(BaseHTTPRequestHandler):
     def access_root(self) -> Path:
         return self.server.access_root
 
+    @property
+    def memory(self):
+        return self.server.memory
+
     def log_message(self, fmt, *args):
         # Never log authorization headers or request bodies.
         print("Pi-Control-Agent:", fmt % args)
@@ -214,10 +218,25 @@ class AgentHandler(BaseHTTPRequestHandler):
                     ["git", "--version"], stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL, check=False,
                 ).returncode == 0,
-                "allowed_actions": ["status", "diff", "read", "list", "tests", "open", "write_file", "trash_file", "run_command"],
+                "allowed_actions": ["status", "diff", "read", "list", "tests", "open", "write_file", "trash_file", "run_command", "memory"],
+                "memory_enabled": True,
                 "bind_host": self.server.bind_host,
                 "allowed_clients": sorted(self.server.allowed_clients),
             })
+            return
+        if parsed.path == "/v1/memory/current":
+            self.send_json(200, {"ok": True, **self.memory.resume_context()})
+            return
+        if parsed.path == "/v1/memory/tasks":
+            self.send_json(200, {"ok": True, "tasks": self.memory.recent_tasks()})
+            return
+        if parsed.path == "/v1/memory/task":
+            task_id = query.get("id", [""])[0]
+            task = self.memory.get_task(task_id) if task_id else None
+            if task is None:
+                self.send_json(404, {"ok": False, "error": "Aufgabe nicht gefunden."})
+                return
+            self.send_json(200, {"ok": True, "task": task, "events": self.memory.task_events(task_id)})
             return
         if parsed.path == "/v1/git/status":
             self.send_json(200, git_output(self.workspace, "status", "--short", "--branch"))
@@ -293,6 +312,42 @@ class AgentHandler(BaseHTTPRequestHandler):
                 launch_app(app_name, self.workspace)
                 self.send_json(200, {"ok": True, "opened": app_name})
             except (OSError, ValueError) as exc:
+                self.send_json(400, {"ok": False, "error": str(exc)[:300]})
+            return
+        if parsed.path == "/v1/memory/task/start":
+            try:
+                title = body.get("title")
+                goal = body.get("goal")
+                if not isinstance(title, str) or not title.strip() or not isinstance(goal, str) or not goal.strip():
+                    raise ValueError("title und goal müssen Text sein.")
+                if len(title) > 200 or len(goal) > 4000:
+                    raise ValueError("Titel oder Ziel ist zu lang.")
+                task = self.memory.start_task(title, goal)
+                self.send_json(201, {"ok": True, "task": task})
+            except (OSError, ValueError) as exc:
+                self.send_json(400, {"ok": False, "error": str(exc)[:300]})
+            return
+        if parsed.path == "/v1/memory/task/step":
+            try:
+                task_id = body.get("task_id")
+                step = body.get("step")
+                message = body.get("message")
+                details = body.get("details", {})
+                status = body.get("status", "in_progress")
+                if not all(isinstance(value, str) and value.strip() for value in (task_id, step, message)):
+                    raise ValueError("task_id, step und message müssen Text sein.")
+                if not isinstance(details, dict):
+                    raise ValueError("details muss ein Objekt sein.")
+                if len(message) > 4000 or len(step) > 200:
+                    raise ValueError("Schritt oder Meldung ist zu lang.")
+                task = self.memory.record_step(
+                    task_id, step, message, details=details, status=status,
+                    summary=body.get("summary"), next_step=body.get("next_step"),
+                )
+                self.send_json(200, {"ok": True, "task": task})
+            except KeyError as exc:
+                self.send_json(404, {"ok": False, "error": str(exc)})
+            except (OSError, ValueError, TypeError) as exc:
                 self.send_json(400, {"ok": False, "error": str(exc)[:300]})
             return
         if parsed.path == "/v1/file/write":
@@ -459,8 +514,17 @@ def main() -> int:
         return 2
     if is_loopback:
         allowed_clients.update({"127.0.0.1", "::1"})
+    # Make the repository-local memory package importable regardless of cwd.
+    sys.path.insert(0, str(workspace))
+    try:
+        from pc_agent.memory import AgentMemory
+        memory = AgentMemory()
+    except Exception as exc:
+        print(f"PC-Agent-Speicher konnte nicht gestartet werden: {exc}", file=sys.stderr)
+        return 2
     token = load_or_create_token()
     server = ThreadingHTTPServer((bind_host, PORT), AgentHandler)
+    server.memory = memory
     server.workspace = workspace
     server.access_root = access_root
     server.token = token
