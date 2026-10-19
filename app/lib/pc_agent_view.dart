@@ -190,12 +190,213 @@ class _PcAgentViewState extends State<PcAgentView> {
     );
   }
 
+  Widget statusOverview() {
+    final data = status;
+    if (data == null) {
+      return Row(
+        children: [
+          const Icon(Icons.info_outline),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              en ? 'Waiting for PC-Agent status…' : 'Warte auf den PC-Agent-Status …',
+            ),
+          ),
+        ],
+      );
+    }
+
+    final online = data['ok'] == true;
+    final actions = (data['allowed_actions'] as List?)
+            ?.map((item) => item.toString())
+            .toList() ??
+        <String>[];
+    final clients = (data['allowed_clients'] as List?)
+            ?.map((item) => item.toString())
+            .toList() ??
+        <String>[];
+
+    Widget infoTile(IconData icon, String label, String value) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest
+              .withValues(alpha: 0.45),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: widget.accentColor, size: 21),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label, style: Theme.of(context).textTheme.labelMedium),
+                  const SizedBox(height: 3),
+                  SelectableText(
+                    value.isEmpty ? '—' : value,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: (online ? Colors.green : Colors.red).withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: (online ? Colors.green : Colors.red).withValues(alpha: 0.35),
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                online ? Icons.check_circle_rounded : Icons.error_rounded,
+                color: online ? Colors.green : Colors.red,
+                size: 28,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      online
+                          ? (en ? 'Agent connected' : 'Agent verbunden')
+                          : (en ? 'Agent needs attention' : 'Agent benötigt Aufmerksamkeit'),
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    Text(
+                      (data['agent'] ?? 'PC-Agent').toString(),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              if (data['git_available'] == true)
+                Tooltip(
+                  message: en ? 'Git available' : 'Git verfügbar',
+                  child: Icon(Icons.account_tree_rounded, color: widget.accentColor),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final columns = constraints.maxWidth >= 520 ? 2 : 1;
+            return GridView.count(
+              crossAxisCount: columns,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              mainAxisSpacing: 10,
+              crossAxisSpacing: 10,
+              childAspectRatio: columns == 2 ? 3.4 : 4.2,
+              children: [
+                infoTile(Icons.computer_rounded, en ? 'Operating system' : 'Betriebssystem',
+                    (data['os'] ?? 'Unknown').toString()),
+                infoTile(Icons.folder_open_rounded, en ? 'Workspace' : 'Arbeitsordner',
+                    (data['workspace'] ?? '—').toString()),
+                infoTile(Icons.home_work_outlined, en ? 'Access root' : 'Zugriffsbereich',
+                    (data['access_root'] ?? '—').toString()),
+                infoTile(Icons.lan_outlined, en ? 'Agent address' : 'Agent-Adresse',
+                    (data['bind_host'] ?? '—').toString()),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 8),
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(bottom: 8),
+          leading: Icon(Icons.shield_outlined, color: widget.accentColor),
+          title: Text(en ? 'Permissions & connection' : 'Berechtigungen & Verbindung'),
+          subtitle: Text(
+            en
+                ? '${actions.length} allowed actions · ${clients.length} allowed clients'
+                : '${actions.length} erlaubte Aktionen · ${clients.length} erlaubte Clients',
+          ),
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                en ? 'Allowed actions' : 'Erlaubte Aktionen',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 7,
+              runSpacing: 7,
+              children: actions
+                  .map((action) => Chip(
+                        avatar: const Icon(Icons.check, size: 16),
+                        label: Text(action),
+                        visualDensity: VisualDensity.compact,
+                      ))
+                  .toList(),
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                en ? 'Allowed clients' : 'Erlaubte Clients',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+            const SizedBox(height: 6),
+            if (clients.isEmpty)
+              Text(en ? 'No client listed' : 'Keine Clients eingetragen')
+            else
+              ...clients.map((client) => ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    leading: const Icon(Icons.devices_other),
+                    title: SelectableText(client),
+                  )),
+          ],
+        ),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            onPressed: () => showDialog<void>(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: Text(en ? 'Raw status data' : 'Rohe Statusdaten'),
+                content: SingleChildScrollView(
+                  child: SelectableText(
+                    const JsonEncoder.withIndent('  ').convert(data),
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: Text(en ? 'Close' : 'Schließen'),
+                  ),
+                ],
+              ),
+            ),
+            icon: const Icon(Icons.data_object),
+            label: Text(en ? 'View raw data' : 'Rohdaten anzeigen'),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final statusText = status == null
-        ? (en ? 'No status received yet' : 'Noch kein Status empfangen')
-        : const JsonEncoder.withIndent('  ').convert(status);
-
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -243,7 +444,7 @@ class _PcAgentViewState extends State<PcAgentView> {
         sectionCard(
           title: en ? 'PC-Agent status' : 'PC-Agent-Status',
           icon: Icons.monitor_heart_outlined,
-          child: SelectableText(statusText),
+          child: statusOverview(),
         ),
         sectionCard(
           title: en ? 'Open an application' : 'Programm öffnen',
