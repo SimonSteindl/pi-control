@@ -469,7 +469,7 @@ class PiLayoutFrame extends StatelessWidget {
                 selectedIndex: selectedIndex,
                 onDestinationSelected: onSelected,
                 groupAlignment: -0.78,
-                backgroundColor: const Color(0xFF0A111D),
+                backgroundColor: const Color(0xFF111419),
                 indicatorColor: Theme.of(context).colorScheme.primary
                     .withValues(alpha: 0.24),
                 leading: Padding(
@@ -657,7 +657,7 @@ class _PiTopNavigation extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: const Color(0xFF0C1421),
+      color: const Color(0xFF111419),
       child: SizedBox(
         height: compact ? 52 : 64,
         child: ListView.separated(
@@ -911,7 +911,7 @@ class _LayoutPreview extends StatelessWidget {
       height: 52,
       padding: const EdgeInsets.all(6),
       decoration: BoxDecoration(
-        color: const Color(0xFF080D15),
+        color: const Color(0xFF0B0D11),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: line.withValues(alpha: .25)),
       ),
