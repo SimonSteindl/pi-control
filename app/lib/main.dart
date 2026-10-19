@@ -43,7 +43,7 @@ class PiControlApp extends StatefulWidget {
 
 class _PiControlAppState extends State<PiControlApp> {
   Color accentColor = const Color(0xFFFF7900);
-  PiLayoutStyle layoutStyle = PiLayoutStyle.commandCenter;
+  PiLayoutStyle layoutStyle = PiLayoutStyle.aurora;
   final PiApiClient client = PiApiClient();
   AuthSession? session;
   bool restoringSession = true;
@@ -289,7 +289,7 @@ class _DashboardPageState extends State<DashboardPage>
   String? androidUpdatePath;
   List<String> dashboardShortcuts = ['files', 'more', 'backups', 'search'];
 
-  static const clientAppVersion = '2.4.3';
+  static const clientAppVersion = '2.5.0';
 
   Future<http.Response> _apiGet(
     String path, {
