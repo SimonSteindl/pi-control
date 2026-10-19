@@ -1991,6 +1991,43 @@ PC_AGENT_TOOL = {
 }
 
 
+def pc_agent_memory_start(title, goal):
+    """Best-effort task journaling; memory outages must never block an approved action."""
+    try:
+        result, status = pc_agent_request(
+            "/v1/memory/task/start",
+            {"title": str(title)[:200], "goal": str(goal)[:4000]},
+            timeout=5,
+        )
+        if status < 300 and result.get("ok") and isinstance(result.get("task"), dict):
+            return result["task"].get("id")
+    except Exception as exc:
+        app.logger.info("PC-Agent-Aufgabenspeicher nicht verfügbar: %s", exc)
+    return None
+
+
+def pc_agent_memory_step(task_id, step, message, *, status="in_progress", summary=None, next_step=None):
+    """Record an action result without changing its execution outcome."""
+    if not task_id:
+        return
+    try:
+        pc_agent_request(
+            "/v1/memory/task/step",
+            {
+                "task_id": task_id,
+                "step": str(step)[:200],
+                "message": str(message)[:4000],
+                "status": status,
+                "summary": summary,
+                "next_step": next_step,
+                "details": {},
+            },
+            timeout=5,
+        )
+    except Exception as exc:
+        app.logger.info("PC-Agent-Aufgabenfortschritt konnte nicht gespeichert werden: %s", exc)
+
+
 def pc_agent_request(path, payload=None, timeout=15):
     base = os.environ.get("PI_CONTROL_PC_AGENT_URL", "").strip().rstrip("/")
     token = os.environ.get("PI_CONTROL_PC_AGENT_TOKEN", "").strip()
@@ -2066,8 +2103,30 @@ def api_pc_agent_action():
             return jsonify({"ok": False, "error": "Diese App ist nicht freigegeben."}), 400
         agent_payload = {"app": app_name}
         endpoint = "/v1/open"
+    action_title = {
+        "write_file": "PC-Agent: Datei ändern",
+        "delete_file": "PC-Agent: Datei in den Papierkorb verschieben",
+        "run_command": "PC-Agent: freigegebenen Befehl ausführen",
+        "open": "PC-Agent: Anwendung öffnen",
+    }[action]
+    task_goal = str(payload.get("summary") or action_title)[:4000]
+    task_id = pc_agent_memory_start(action_title, task_goal)
+    pc_agent_memory_step(
+        task_id, "approved", "Die Aktion wurde vom Benutzer ausdrücklich bestätigt.",
+        status="in_progress", summary=task_goal,
+        next_step="Aktion ausführen und Ergebnis speichern.",
+    )
     result, status = pc_agent_request(endpoint, agent_payload, timeout=135 if action == "run_command" else 15)
-    write_audit("pc_agent.action", action, {"approved": True, "ok": bool(result.get("ok"))})
+    action_ok = bool(result.get("ok")) and status < 400
+    pc_agent_memory_step(
+        task_id,
+        "result",
+        str(result.get("error") or ("Aktion erfolgreich ausgeführt." if action_ok else "Aktion fehlgeschlagen.")),
+        status="completed" if action_ok else "failed",
+        summary=task_goal,
+        next_step="" if action_ok else "Fehler prüfen und bei Bedarf eine korrigierte Aktion vorschlagen.",
+    )
+    write_audit("pc_agent.action", action, {"approved": True, "ok": action_ok})
     return jsonify(result), status
 
 
