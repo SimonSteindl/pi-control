@@ -64,7 +64,7 @@ class _PcAgentViewState extends State<PcAgentView> {
 
     try {
       final response = await widget.apiGet(
-        '/api/pc-agent/status',
+        'pc-agent/status',
         null,
         const Duration(seconds: 15),
       );
@@ -126,7 +126,7 @@ class _PcAgentViewState extends State<PcAgentView> {
 
     try {
       final response = await widget.apiPost(
-        '/api/pc-agent/action',
+        'pc-agent/action',
         {'Content-Type': 'application/json'},
         jsonEncode({...payload, 'approved': true}),
         timeout,
