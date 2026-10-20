@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'pc-agent/**'
+      - 'pc_agent/**'
+      - 'server/server.py'
       - '.github/workflows/pc-agent-tests.yml'
   push:
     branches: [main, feature/cross-platform-pc-agent, feature/pc-agent-autonomous-tasks]
@@ -25,7 +27,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Check Python syntax
-        run: python -m py_compile pc-agent/agent.py pc-agent/local_api.py pc-agent/test_local_api.py pc-agent/test_task_runner.py pc_agent/task_runner.py
+        run: python -m py_compile server/server.py pc-agent/agent.py pc-agent/local_api.py pc-agent/test_local_api.py pc-agent/test_task_runner.py pc_agent/task_runner.py
       - name: Smoke test
         run: |
           python pc-agent/agent.py info
