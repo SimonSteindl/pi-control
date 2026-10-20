@@ -11,6 +11,8 @@ on:
     branches: [main, feature/cross-platform-pc-agent, feature/pc-agent-autonomous-tasks]
     paths:
       - 'pc-agent/**'
+      - 'pc_agent/**'
+      - 'server/server.py'
       - '.github/workflows/pc-agent-tests.yml'
 
 permissions:
