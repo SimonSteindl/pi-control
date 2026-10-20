@@ -2078,7 +2078,7 @@ def pc_agent_request(path, payload=None, timeout=15):
     req = urllib.request.Request(f"{base}{path}", data=data, headers=headers, method="GET" if data is None else "POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
-            raw = response.read(256 * 1024).decode("utf-8", errors="replace")
+            raw = response.read(1_500_000).decode("utf-8", errors="replace")
             result = json.loads(raw) if raw else {}
             return (result if isinstance(result, dict) else {"ok": False, "error": "Ungültige Agent-Antwort."}), response.status
     except urllib.error.HTTPError as exc:
