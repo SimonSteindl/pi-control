@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import base64
+from contextlib import closing
 import datetime
 import hashlib
 import html
@@ -1777,21 +1778,21 @@ def process_scheduled_tasks():
 def initialize_ai_memory_database():
     """Create the private, per-user long-term memory store for Pi-Control AI."""
     BASE_DIR.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(AI_MEMORY_DB_FILE, timeout=10) as connection:
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS ai_memories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                memory TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
-                UNIQUE (user_id, memory)
+    with closing(sqlite3.connect(AI_MEMORY_DB_FILE, timeout=10)) as connection:
+        with connection:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS ai_memories ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "user_id INTEGER NOT NULL, "
+                "memory TEXT NOT NULL, "
+                "created_at INTEGER NOT NULL, "
+                "updated_at INTEGER NOT NULL, "
+                "UNIQUE (user_id, memory))"
             )
-        """)
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS ai_memories_user_updated "
-            "ON ai_memories(user_id, updated_at DESC)"
-        )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS ai_memories_user_updated "
+                "ON ai_memories(user_id, updated_at DESC)"
+            )
     try:
         os.chmod(AI_MEMORY_DB_FILE, 0o600)
     except OSError:
@@ -1817,37 +1818,33 @@ def save_ai_memory(user_id, memory):
     if secret_pattern.search(memory):
         return False, "Passwörter, API-Schlüssel und andere Geheimnisse werden nicht gespeichert."
     now = int(time.time())
-    with ai_memory_connection() as connection:
-        connection.execute(
-            """INSERT INTO ai_memories (user_id, memory, created_at, updated_at)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(user_id, memory)
-               DO UPDATE SET updated_at = excluded.updated_at""",
-            (int(user_id), memory, now, now),
-        )
-        # Keep the newest 100 memories per account.
-        connection.execute(
-            """DELETE FROM ai_memories
-               WHERE user_id = ? AND id NOT IN (
-                   SELECT id FROM ai_memories
-                   WHERE user_id = ?
-                   ORDER BY updated_at DESC, id DESC LIMIT 100
-               )""",
-            (int(user_id), int(user_id)),
-        )
+    with closing(ai_memory_connection()) as connection:
+        with connection:
+            connection.execute(
+                "INSERT INTO ai_memories (user_id, memory, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(user_id, memory) "
+                "DO UPDATE SET updated_at = excluded.updated_at",
+                (int(user_id), memory, now, now),
+            )
+            connection.execute(
+                "DELETE FROM ai_memories WHERE user_id = ? AND id NOT IN ("
+                "SELECT id FROM ai_memories WHERE user_id = ? "
+                "ORDER BY updated_at DESC, id DESC LIMIT 100)",
+                (int(user_id), int(user_id)),
+            )
     return True, ""
 
 
 def get_ai_memories(user_id, limit=40):
-    with ai_memory_connection() as connection:
+    with closing(ai_memory_connection()) as connection:
         rows = connection.execute(
-            """SELECT id, memory, created_at, updated_at
-               FROM ai_memories WHERE user_id = ?
-               ORDER BY updated_at DESC, id DESC LIMIT ?""",
+            "SELECT id, memory, created_at, updated_at "
+            "FROM ai_memories WHERE user_id = ? "
+            "ORDER BY updated_at DESC, id DESC LIMIT ?",
             (int(user_id), max(1, min(int(limit), 100))),
         ).fetchall()
     return [dict(row) for row in rows]
-
 
 def format_ai_memory_context(user_id):
     memories = get_ai_memories(user_id, limit=40)
@@ -1955,11 +1952,12 @@ def api_ai_memory_create():
 @app.delete("/api/ai/memory/<int:memory_id>")
 @authentication_required()
 def api_ai_memory_delete(memory_id):
-    with ai_memory_connection() as connection:
-        cursor = connection.execute(
-            "DELETE FROM ai_memories WHERE id = ? AND user_id = ?",
-            (int(memory_id), current_user_id()),
-        )
+    with closing(ai_memory_connection()) as connection:
+        with connection:
+            cursor = connection.execute(
+                "DELETE FROM ai_memories WHERE id = ? AND user_id = ?",
+                (int(memory_id), current_user_id()),
+            )
     if cursor.rowcount == 0:
         return jsonify({"ok": False, "error": "Erinnerung nicht gefunden."}), 404
     write_audit("ai.memory.delete", str(memory_id))
