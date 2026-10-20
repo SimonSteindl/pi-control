@@ -22,7 +22,7 @@ void main() {
     for (final style in PiLayoutStyle.values) {
       expect(piLayoutStyleFromKey(style.storageKey), style);
     }
-    expect(piLayoutStyleFromKey('unbekannt'), PiLayoutStyle.aurora);
+    expect(piLayoutStyleFromKey('unbekannt'), PiLayoutStyle.commandCenter);
   });
 
   test('jede Variante erzeugt eigene globale Designtokens', () {
