@@ -1989,6 +1989,46 @@ PC_AGENT_TOOL = {
 }
 
 
+PC_AGENT_TASK_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "run_safe_pc_task",
+        "description": (
+            "Execute a user-requested multi-step PC task using only safe, read-only operations. "
+            "Use for inspecting status, Git status/diff, reading allowed files, listing allowed folders, "
+            "or running the fixed memory test. Never use for edits, deletes, arbitrary commands, or app launches. "
+            "Only call when the user explicitly asks you to perform a task, not for general questions."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "maxLength": 200},
+                "goal": {"type": "string", "maxLength": 4000},
+                "steps": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 8,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": ["status", "git_status", "git_diff", "read_file", "list_files", "tests"]
+                            },
+                            "path": {"type": "string", "maxLength": 1000}
+                        },
+                        "required": ["action"],
+                        "additionalProperties": False
+                    }
+                }
+            },
+            "required": ["title", "goal", "steps"],
+            "additionalProperties": False
+        }
+    }
+}
+
+
 def pc_agent_memory_start(title, goal):
     """Best-effort task journaling; memory outages must never block an approved action."""
     try:
@@ -2155,10 +2195,11 @@ def api_ai_chat():
     )
     if pc_agent_enabled:
         system_prompt += (
-            "\n\nDu kannst eine PC-Aktion vorschlagen, wenn der Nutzer ausdrücklich möchte, dass du etwas auf seinem CachyOS-PC erledigst. "
-            "Nutze dafür propose_pc_action und genau eine Aktion pro Vorschlag. Die Aktion wird niemals automatisch ausgeführt; "
-            "der Nutzer muss sie im Pi-Control-UI bestätigen. Bei Löschen, Dateiüberschreiben, Befehlen, Installationen oder Systemänderungen "
-            "erkläre klar, was passieren soll. Für reine Fragen und Erklärungen rufe das Tool nicht auf."
+            "\n\nWenn der Nutzer ausdrücklich eine Aufgabe auf seinem CachyOS-PC erledigt haben möchte, nutze run_safe_pc_task "
+            "für mehrstufige, ausschließlich lesende Prüfungen (Status, Git-Status/Diff, freigegebene Dateien lesen/auflisten oder den festgelegten Speichertest). "
+            "Das Tool führt höchstens 8 sichere Schritte nacheinander aus und protokolliert Ergebnisse. Erfinde keine Ergebnisse. "
+            "Nutze propose_pc_action nur für einzelne Änderungen, Löschungen, Befehle oder App-Starts; diese benötigen weiterhin die ausdrückliche Bestätigung im UI. "
+            "Führe niemals riskante Aktionen als sichere Aufgabe aus. Für reine Fragen und Erklärungen rufe kein PC-Tool auf."
         )
     messages = [{
         "role": "system",
@@ -2243,7 +2284,7 @@ def api_ai_chat():
         "options": {"num_ctx": 4096, "num_predict": 512},
     }
     if pc_agent_enabled:
-        chat_request["tools"] = [PC_AGENT_TOOL]
+        chat_request["tools"] = [PC_AGENT_TOOL, PC_AGENT_TASK_TOOL]
     body = json.dumps(chat_request).encode("utf-8")
     req = urllib.request.Request(
         f"{ollama_base}/api/chat",
@@ -2276,9 +2317,51 @@ def api_ai_chat():
         if len(tool_calls) != 1 or not isinstance(tool_calls[0], dict):
             return jsonify({"ok": False, "error": "Bitte fordere die PC-Aktionen einzeln an."}), 502
         call = tool_calls[0].get("function") or {}
+        arguments = call.get("arguments", {})
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = {}
+        if call.get("name") == "run_safe_pc_task":
+            if not pc_agent_enabled:
+                return jsonify({"ok": False, "error": "PC-Agent ist nicht gekoppelt."}), 503
+            if not isinstance(arguments, dict):
+                return jsonify({"ok": False, "error": "Der Aufgabenplan ist ungültig."}), 502
+            # The local agent independently validates the entire plan before starting it.
+            task_payload = {
+                "title": arguments.get("title"),
+                "goal": arguments.get("goal"),
+                "steps": arguments.get("steps"),
+            }
+            task_result, task_status = pc_agent_request(
+                "/v1/agent/run", task_payload, timeout=200
+            )
+            write_audit(
+                "ai.pc_task.executed",
+                str(task_payload.get("title") or "safe-task")[:200],
+                {"ok": bool(task_result.get("ok")), "http_status": task_status},
+            )
+            if task_status >= 400 or not task_result.get("ok"):
+                detail = str(task_result.get("error") or "Ein sicherer Aufgabenschritt ist fehlgeschlagen.")[:500]
+                return jsonify({
+                    "ok": True, "model": model,
+                    "message": {"role": "assistant", "content": f"Die Aufgabe wurde gestartet, aber nicht vollständig abgeschlossen. {detail}"},
+                    "task_result": task_result,
+                })
+            result_lines = []
+            for item in task_result.get("results", []):
+                label = str(item.get("step") or "Schritt")
+                detail = item.get("output") or item.get("content") or item.get("path") or item.get("value") or item.get("error") or "Erledigt"
+                result_lines.append(f"- {label}: {str(detail)[:1200]}")
+            answer_text = "Fertig. Ich habe die sicheren Schritte ausgeführt.\n" + "\n".join(result_lines)
+            return jsonify({
+                "ok": True, "model": model,
+                "message": {"role": "assistant", "content": answer_text},
+                "task_result": task_result,
+            })
         if call.get("name") != "propose_pc_action":
             return jsonify({"ok": False, "error": "Die KI hat eine unbekannte Aktion vorgeschlagen."}), 502
-        arguments = call.get("arguments", {})
         if isinstance(arguments, str):
             try:
                 arguments = json.loads(arguments)
