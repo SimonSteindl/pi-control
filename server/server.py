@@ -373,7 +373,9 @@ def initialize_auth_database():
 
         if user_count == 0:
             username = "stoney22"
-            password = secrets.token_urlsafe(18)
+            password = os.environ.get("PI_CONTROL_INITIAL_ADMIN_PASSWORD", "")
+            if len(password) < 10:
+                raise RuntimeError("Für die Ersteinrichtung PI_CONTROL_INITIAL_ADMIN_PASSWORD mit mindestens 10 Zeichen setzen.")
             now = int(time.time())
 
             connection.execute(
@@ -400,14 +402,6 @@ def initialize_auth_database():
                 ),
             )
 
-            INITIAL_ADMIN_FILE.write_text(
-                json.dumps({
-                    "username": username,
-                    "password": password,
-                }),
-                encoding="utf-8",
-            )
-            os.chmod(INITIAL_ADMIN_FILE, 0o600)
 
     os.chmod(AUTH_DB_FILE, 0o600)
 
