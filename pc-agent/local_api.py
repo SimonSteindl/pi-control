@@ -331,8 +331,11 @@ class AgentHandler(BaseHTTPRequestHandler):
                         return git_output(self.workspace, "diff", "--")
                     if action == "read_file":
                         target = safe_file(self.access_root, step["path"])
+                        content = target.read_text(encoding="utf-8")
+                        output_limit = 12_000
                         return {"ok": True, "path": str(target),
-                                "content": target.read_text(encoding="utf-8")}
+                                "content": content[:output_limit],
+                                "truncated": len(content) > output_limit}
                     if action == "list_files":
                         directory = resolve_user_path(self.access_root, step["path"])
                         if not directory.is_dir():
