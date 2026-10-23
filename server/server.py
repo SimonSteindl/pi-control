@@ -44,6 +44,11 @@ NTFY_TOPIC = "Stoney22"
 
 BASE_DIR = Path("/home/stoney22/pi-control")
 WEB_DIR = BASE_DIR / "web"
+if not (WEB_DIR / "index.html").is_file():
+    for candidate in (BASE_DIR / "app" / "build" / "web", BASE_DIR / "app" / "web"):
+        if (candidate / "index.html").is_file():
+            WEB_DIR = candidate
+            break
 HISTORY_FILE = BASE_DIR / "history.json"
 BENCHMARK_FILE = BASE_DIR / "benchmark.json"
 BENCHMARK_HISTORY_FILE = BASE_DIR / "benchmark_history.json"
@@ -1908,6 +1913,39 @@ def is_ai_memory_recall_request(message):
     ))
 
 
+
+def is_explicit_safe_pc_task_request(message):
+    """Recognize explicit requests for safe, read-only PC tasks."""
+    text = str(message or "").strip()
+
+    if re.match(
+        r"^(?:wie|warum|was bedeutet|was ist|erklär|erklaer|explain|how do i|how can i)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return False
+
+    verb = (
+        r"(?:prüf\w*|pruef\w*|kontrollier\w*|zeige|zeig|liste|lies|lese|"
+        r"check|inspect|show|list|teste\w*|führe\s+aus|fuehre\s+aus)"
+    )
+    target = (
+        r".*(?:git|status|diff|datei\w*|ordner\w*|verzeichnis\w*|"
+        r"tests?|pc.agent|agent.status|speicher|memory|gedächtnis|"
+        r"gedaechtnis|systemstatus)"
+    )
+
+    direct = re.match(verb + target, text, flags=re.IGNORECASE)
+    polite = re.match(
+        r"^(?:kannst du|könntest du|koenntest du|würdest du|wuerdest du)\b.*"
+        + verb + target,
+        text,
+        flags=re.IGNORECASE,
+    )
+    return bool(direct or polite)
+
+
+
 def is_explicit_pc_action_request(message):
     """Recognize direct action requests, not how-to questions about the PC."""
     text = str(message or "").strip()
@@ -2193,7 +2231,7 @@ def api_ai_chat():
             "für mehrstufige, ausschließlich lesende Prüfungen (Status, Git-Status/Diff, freigegebene Dateien lesen/auflisten oder den festgelegten Speichertest). "
             "Das Tool führt höchstens 8 sichere Schritte nacheinander aus und protokolliert Ergebnisse. Erfinde keine Ergebnisse. "
             "Nutze propose_pc_action nur für einzelne Änderungen, Löschungen, Befehle oder App-Starts; diese benötigen weiterhin die ausdrückliche Bestätigung im UI. "
-            "Führe niemals riskante Aktionen als sichere Aufgabe aus. Für reine Fragen und Erklärungen rufe kein PC-Tool auf."
+            "Führe niemals riskante Aktionen als sichere Aufgabe aus. Für reine Fragen und Erklärungen rufe kein PC-Tool auf. Jeder Schritt in steps darf ausschließlich action und bei read_file oder list_files zusätzlich path enthalten. Verwende keine Felder wie description, reason, command oder expected_result. Erlaubte action-Werte sind exakt status, git_status, git_diff, read_file, list_files, tests. Gültige Beispiele: ein Schritt mit action gleich git_status oder ein Schritt mit action gleich read_file und path gleich server/server.py."
         )
     messages = [{
         "role": "system",
@@ -2278,7 +2316,10 @@ def api_ai_chat():
         "options": {"num_ctx": 4096, "num_predict": 512},
     }
     if pc_agent_enabled:
-        chat_request["tools"] = [PC_AGENT_TOOL, PC_AGENT_TASK_TOOL]
+        if is_explicit_safe_pc_task_request(latest_user_message):
+            chat_request["tools"] = [PC_AGENT_TASK_TOOL]
+        elif is_explicit_pc_action_request(latest_user_message):
+            chat_request["tools"] = [PC_AGENT_TOOL]
     body = json.dumps(chat_request).encode("utf-8")
     req = urllib.request.Request(
         f"{ollama_base}/api/chat",
@@ -2322,11 +2363,25 @@ def api_ai_chat():
                 return jsonify({"ok": False, "error": "PC-Agent ist nicht gekoppelt."}), 503
             if not isinstance(arguments, dict):
                 return jsonify({"ok": False, "error": "Der Aufgabenplan ist ungültig."}), 502
-            # The local agent independently validates the entire plan before starting it.
+            # Remove only an empty path added to pathless actions.
+            # Preserve other fields so the agent can reject invalid plans.
+            raw_steps = arguments.get("steps")
+            if isinstance(raw_steps, list):
+                normalized_steps = []
+                for step in raw_steps:
+                    if not isinstance(step, dict):
+                        normalized_steps.append(step)
+                        continue
+                    normalized = dict(step)
+                    if normalized.get("action") not in {"read_file", "list_files"}:
+                        normalized.pop("path", None)
+                    normalized_steps.append(normalized)
+                raw_steps = normalized_steps
+
             task_payload = {
-                "title": arguments.get("title"),
+                "title": (arguments.get("title").strip()[:200] if isinstance(arguments.get("title"), str) and arguments.get("title").strip() else "Sichere PC-Aufgabe"),
                 "goal": arguments.get("goal"),
-                "steps": arguments.get("steps"),
+                "steps": raw_steps,
             }
             task_result, task_status = pc_agent_request(
                 "/v1/agent/run", task_payload, timeout=200
@@ -2394,6 +2449,17 @@ def api_ai_chat():
             "message": {"role": "assistant", "content": summary},
             "action_request": safe_action,
         })
+
+    if pc_agent_enabled and is_explicit_safe_pc_task_request(latest_user_message):
+        return jsonify({
+            "ok": False,
+            "error": (
+                "Die lokale KI hat keinen gültigen Aufgabenaufruf erstellt. "
+                "Bitte formuliere die Prüfung kürzer und konkreter, zum Beispiel: "
+                "„Zeige den Git-Status“."
+            ),
+            "code": "pc_task_no_tool_call",
+        }), 502
 
     if not isinstance(answer, str) or not answer.strip():
         return jsonify({"ok": False, "error": "Ollama hat keine Antwort geliefert."}), 502

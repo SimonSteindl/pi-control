@@ -42,7 +42,8 @@ def validate_plan(title: Any, goal: Any, steps: Any) -> list[dict[str, str]]:
                 f"Aktion in Schritt {index} ist nicht für automatische Ausführung freigegeben."
             )
         if set(step) - STEP_FIELDS[action]:
-            raise PlanValidationError(f"Schritt {index} enthält unbekannte Felder.")
+            unknown = sorted(set(step) - STEP_FIELDS[action])
+            raise PlanValidationError(f"Schritt {index} enthält unbekannte Felder: {chr(44).join(unknown)}.")
         item = {"action": action}
         if action in {"read_file", "list_files"}:
             path = step.get("path", "." if action == "list_files" else "")

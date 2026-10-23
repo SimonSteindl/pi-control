@@ -363,8 +363,14 @@ class AgentHandler(BaseHTTPRequestHandler):
                         test_file = self.workspace / "server" / "test_ai_memory.py"
                         if not test_file.is_file():
                             return {"ok": False, "error": "Kein bekannter Test gefunden."}
+                        project_python = self.workspace / ".venv" / "bin" / "python"
+                        test_python = (
+                            str(project_python)
+                            if project_python.is_file()
+                            else sys.executable
+                        )
                         result = subprocess.run(
-                            [sys.executable, str(test_file)], cwd=self.workspace,
+                            [test_python, str(test_file)], cwd=self.workspace,
                             text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             timeout=180, check=False,
                         )
