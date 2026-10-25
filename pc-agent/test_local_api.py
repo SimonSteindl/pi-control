@@ -31,6 +31,25 @@ class LocalApiSafetyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             MODULE.safe_file(self.workspace, "missing.txt")
 
+    def test_git_diff_endpoint_requires_and_passes_a_single_path(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        route = source.split('parsed.path == "/v1/git/diff":', 1)[1].split(
+            'parsed.path == "/v1/file":', 1
+        )[0]
+        self.assertIn("validate_git_diff_path(supplied)", route)
+        self.assertIn('"--no-ext-diff"', route)
+        self.assertIn('"--no-textconv"', route)
+        self.assertIn('"--", safe_path', route)
+        self.assertNotIn('"diff", "--")', route)
+
+    def test_git_diff_safe_plan_passes_the_validated_step_path(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        route = source.split('if action == "git_diff":', 1)[1].split(
+            'if action == "read_file":', 1
+        )[0]
+        self.assertIn('"--", step["path"]', route)
+        self.assertNotIn('"diff", "--")', route)
+
     def test_listener_defaults_to_loopback_and_remote_needs_allowlist(self):
         source = MODULE_PATH.read_text(encoding="utf-8")
         self.assertIn('parser.add_argument("--bind-host", default="127.0.0.1"', source)

@@ -218,7 +218,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                     ["git", "--version"], stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL, check=False,
                 ).returncode == 0,
-                "allowed_actions": ["status", "diff", "read", "list", "tests", "open", "write_file", "trash_file", "run_command", "memory"],
+                "allowed_actions": ["status", "diff", "read", "list", "tests", "open", "write_file", "trash_file", "run_command", "memory", "run_safe_plan"],
                 "memory_enabled": True,
                 "bind_host": self.server.bind_host,
                 "allowed_clients": sorted(self.server.allowed_clients),
@@ -242,7 +242,17 @@ class AgentHandler(BaseHTTPRequestHandler):
             self.send_json(200, git_output(self.workspace, "status", "--short", "--branch"))
             return
         if parsed.path == "/v1/git/diff":
-            self.send_json(200, git_output(self.workspace, "diff", "--"))
+            from pc_agent.task_runner import PlanValidationError, validate_git_diff_path
+            supplied = query.get("path", [""])[0]
+            try:
+                safe_path = validate_git_diff_path(supplied)
+            except PlanValidationError as exc:
+                self.send_json(400, {"ok": False, "error": str(exc)})
+                return
+            self.send_json(200, git_output(
+                self.workspace, "diff", "--no-ext-diff", "--no-textconv",
+                "--", safe_path
+            ))
             return
         if parsed.path == "/v1/file":
             supplied = query.get("path", [""])[0]
@@ -306,6 +316,88 @@ class AgentHandler(BaseHTTPRequestHandler):
             self.send_json(400, {"ok": False, "error": "JSON-Objekt erwartet."})
             return
         parsed = urlparse(self.path)
+        if parsed.path == "/v1/agent/run":
+            try:
+                # Import after main() adds the repository root to sys.path.
+                from pc_agent.task_runner import PlanValidationError, run_plan
+
+                title = body.get("title")
+                goal = body.get("goal")
+                steps = body.get("steps")
+
+                def execute_safe_step(step):
+                    action = step["action"]
+                    if action == "status":
+                        git_available = subprocess.run(
+                            ["git", "--version"], stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, check=False,
+                        ).returncode == 0
+                        return {"ok": True, "os": platform.system(),
+                                "workspace": str(self.workspace),
+                                "git_available": git_available}
+                    if action == "git_status":
+                        return git_output(self.workspace, "status", "--short", "--branch")
+                    if action == "git_diff":
+                        return git_output(
+                            self.workspace, "diff", "--no-ext-diff",
+                            "--no-textconv", "--", step["path"]
+                        )
+                    if action == "read_file":
+                        target = safe_file(self.access_root, step["path"])
+                        content = target.read_text(encoding="utf-8")
+                        output_limit = 12_000
+                        return {"ok": True, "path": str(target),
+                                "content": content[:output_limit],
+                                "truncated": len(content) > output_limit}
+                    if action == "list_files":
+                        directory = resolve_user_path(self.access_root, step["path"])
+                        if not directory.is_dir():
+                            raise ValueError("Der Pfad ist kein Ordner.")
+                        entries = []
+                        with os.scandir(directory) as iterator:
+                            for entry in iterator:
+                                if len(entries) >= MAX_DIRECTORY_ENTRIES:
+                                    break
+                                try:
+                                    child = resolve_user_path(self.access_root, entry.path)
+                                    if child.is_dir():
+                                        kind = "directory"
+                                    elif child.is_file():
+                                        kind = "file"
+                                    else:
+                                        continue
+                                    entries.append({"name": entry.name, "type": kind})
+                                except (OSError, ValueError):
+                                    continue
+                        entries.sort(key=lambda item: (item["type"] != "directory", item["name"].lower()))
+                        return {"ok": True, "path": str(directory), "entries": entries,
+                                "truncated": len(entries) >= MAX_DIRECTORY_ENTRIES}
+                    if action == "tests":
+                        test_file = self.workspace / "server" / "test_ai_memory.py"
+                        if not test_file.is_file():
+                            return {"ok": False, "error": "Kein bekannter Test gefunden."}
+                        project_python = self.workspace / ".venv" / "bin" / "python"
+                        test_python = (
+                            str(project_python)
+                            if project_python.is_file()
+                            else sys.executable
+                        )
+                        result = subprocess.run(
+                            [test_python, str(test_file)], cwd=self.workspace,
+                            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            timeout=180, check=False,
+                        )
+                        return {"ok": result.returncode == 0, "exit_code": result.returncode,
+                                "output": result.stdout[-10000:]}
+                    raise ValueError("Aktion ist nicht freigegeben.")
+
+                result = run_plan(self.memory, title, goal, steps, execute_safe_step)
+                self.send_json(200 if result.get("ok") else 409, result)
+            except PlanValidationError as exc:
+                self.send_json(400, {"ok": False, "error": str(exc)})
+            except (OSError, UnicodeError, ValueError, TypeError) as exc:
+                self.send_json(400, {"ok": False, "error": str(exc)[:300]})
+            return
         if parsed.path == "/v1/open":
             try:
                 app_name = str(body.get("app", ""))

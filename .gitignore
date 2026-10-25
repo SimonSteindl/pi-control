@@ -9,3 +9,9 @@ app/build/
 app/.idea/
 app/*.iml
 app/pubspec.yaml.before-major-updates
+auth.db
+auth.db-shm
+auth.db-wal
+ai_memory.db
+ai_memory.db-shm
+ai_memory.db-wal
