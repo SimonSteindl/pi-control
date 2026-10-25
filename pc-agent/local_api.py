@@ -242,7 +242,17 @@ class AgentHandler(BaseHTTPRequestHandler):
             self.send_json(200, git_output(self.workspace, "status", "--short", "--branch"))
             return
         if parsed.path == "/v1/git/diff":
-            self.send_json(200, git_output(self.workspace, "diff", "--"))
+            from pc_agent.task_runner import PlanValidationError, validate_git_diff_path
+            supplied = query.get("path", [""])[0]
+            try:
+                safe_path = validate_git_diff_path(supplied)
+            except PlanValidationError as exc:
+                self.send_json(400, {"ok": False, "error": str(exc)})
+                return
+            self.send_json(200, git_output(
+                self.workspace, "diff", "--no-ext-diff", "--no-textconv",
+                "--", safe_path
+            ))
             return
         if parsed.path == "/v1/file":
             supplied = query.get("path", [""])[0]
@@ -328,7 +338,10 @@ class AgentHandler(BaseHTTPRequestHandler):
                     if action == "git_status":
                         return git_output(self.workspace, "status", "--short", "--branch")
                     if action == "git_diff":
-                        return git_output(self.workspace, "diff", "--")
+                        return git_output(
+                            self.workspace, "diff", "--no-ext-diff",
+                            "--no-textconv", "--", step["path"]
+                        )
                     if action == "read_file":
                         target = safe_file(self.access_root, step["path"])
                         content = target.read_text(encoding="utf-8")

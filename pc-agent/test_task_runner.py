@@ -9,6 +9,31 @@ from pc_agent.task_runner import PlanValidationError, run_plan, validate_plan
 
 
 class TaskRunnerTests(unittest.TestCase):
+    def test_git_diff_requires_one_safe_path(self):
+        plan = validate_plan("Diff", "Inspect one file", [
+            {"action": "git_diff", "path": "server/README.md"}
+        ])
+        self.assertEqual(
+            plan[0], {"action": "git_diff", "path": "server/README.md"}
+        )
+
+    def test_git_diff_rejects_missing_unsafe_and_protected_paths(self):
+        invalid_paths = (
+            "",
+            "../outside.txt",
+            "history.json",
+            "server/test_auth_api.py",
+            "pc_agent_write_probe.txt",
+            ":(glob)**",
+            "/etc/passwd",
+            "server//README.md",
+        )
+        for path in invalid_paths:
+            with self.subTest(path=path), self.assertRaises(PlanValidationError):
+                validate_plan("Diff", "Inspect safely", [
+                    {"action": "git_diff", "path": path}
+                ])
+
     def test_validates_and_normalizes_safe_plan(self):
         plan = validate_plan("Check", "Check repository", [
             {"action": "git_status"}, {"action": "read_file", "path": "README.md"},

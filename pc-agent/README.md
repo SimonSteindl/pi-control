@@ -29,7 +29,7 @@ Geschützte Endpunkte:
 
 - `GET /v1/status`
 - `GET /v1/git/status`
-- `GET /v1/git/diff`
+- `GET /v1/git/diff?path=...` – Diff ausschließlich für genau einen validierten Dateipfad; ohne `path` wird die Anfrage abgelehnt
 - `GET /v1/file?path=...` – Textdatei bis 1 MB lesen
 - `GET /v1/files?path=...` – direkten Ordnerinhalt auflisten
 - `POST /v1/open` – nur erlaubte Programme

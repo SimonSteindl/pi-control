@@ -13,7 +13,7 @@ ALLOWED_ACTIONS = {"status", "git_status", "git_diff", "read_file", "list_files"
 STEP_FIELDS = {
     "status": {"action"},
     "git_status": {"action"},
-    "git_diff": {"action"},
+    "git_diff": {"action", "path"},
     "read_file": {"action", "path"},
     "list_files": {"action", "path"},
     "tests": {"action"},
@@ -22,6 +22,31 @@ STEP_FIELDS = {
 
 class PlanValidationError(ValueError):
     """Raised when a task plan is malformed or asks for an unsafe action."""
+
+
+def validate_git_diff_path(path: Any) -> str:
+    """Accept one concrete, repository-relative path for git diff."""
+    if not isinstance(path, str) or not path or len(path) > 1000:
+        raise PlanValidationError("git_diff benötigt genau einen gültigen Dateipfad.")
+    if path != path.strip() or "\x00" in path or "\\" in path:
+        raise PlanValidationError("Ungültiger Dateipfad für git_diff.")
+    if path.startswith("/") or ":" in path:
+        raise PlanValidationError("git_diff erlaubt nur relative Dateipfade.")
+    parts = path.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise PlanValidationError("Ungültiger Pfadbestandteil für git_diff.")
+    if any(char in path for char in "*?[]"):
+        raise PlanValidationError("git_diff erlaubt keine Muster oder Wildcards.")
+    if any(part == ".git" for part in parts):
+        raise PlanValidationError("git_diff darf nicht auf .git zugreifen.")
+    protected = {
+        "history.json",
+        "server/test_auth_api.py",
+        "pc_agent_write_probe.txt",
+    }
+    if path in protected:
+        raise PlanValidationError("Dieser Dateipfad ist für git_diff gesperrt.")
+    return path
 
 
 def validate_plan(title: Any, goal: Any, steps: Any) -> list[dict[str, str]]:
@@ -50,6 +75,8 @@ def validate_plan(title: Any, goal: Any, steps: Any) -> list[dict[str, str]]:
             if not isinstance(path, str) or not path.strip() or len(path) > 1000:
                 raise PlanValidationError(f"Schritt {index} benötigt einen gültigen Pfad.")
             item["path"] = path
+        if action == "git_diff":
+            item["path"] = validate_git_diff_path(step.get("path", ""))
         normalized.append(item)
     return normalized
 
