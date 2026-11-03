@@ -1416,7 +1416,7 @@ class _AiChatTabState extends State<_AiChatTab> {
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
   final List<Map<String, String>> _messages = [];
-  String _model = 'qwen3:1.7b';
+  String _model = 'qwen3.5:4b';
   bool _sending = false;
   String? _error;
 
@@ -1544,6 +1544,10 @@ class _AiChatTabState extends State<_AiChatTab> {
                       DropdownMenuItem(
                         value: 'qwen3:4b',
                         child: Text('4B'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'qwen3.5:4b',
+                        child: Text('Qwen3.5 4B'),
                       ),
                     ],
                     onChanged: _sending
