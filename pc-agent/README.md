@@ -5,12 +5,15 @@ Der Helfer ist für **Windows 11 und Linux (einschließlich CachyOS)** ausgelegt
 ## Aktueller Umfang
 
 - zeigt System-, Projekt- und Git-Status und liest freigegebene Textdateien;
+- prüft Python-Syntax mit `ast.parse`, ohne Projektcode auszuführen oder Bytecode zu schreiben;
+- führt einzelne vorhandene Python-Tests sowie einzelne Flutter-Tests aus `app/test/` aus;
 - listet Ordner im freigegebenen Benutzerverzeichnis und startet den KI-Speichertest;
+- kann begrenzte Änderungen an Projektdateien durchführen, exakte Textstellen ersetzen und danach Tests ausführen;
 - öffnet erlaubte Apps und HTTP(S)-Adressen;
 - unterstützt im Pi-Control-AI-Chat bestätigungspflichtige PC-Aktionen;
 - schreibt Dateien mit Sicherung vorhandener Dateien, verschiebt Löschungen in einen Agent-Papierkorb und führt Befehle als Argumentliste ohne Shell-Auswertung aus.
 
-**Noch nicht enthalten:** automatische Umwandlung beliebiger natürlicher Sprache in einen Plan, sichtbare Maus-/Tastatursteuerung und Administrator-/Root-Aktionen. Dateiänderungen, Löschungen und Befehle werden erst nach ausdrücklicher Bestätigung im Pi-Control-UI ausgeführt.
+**Noch nicht enthalten:** sichtbare Maus-/Tastatursteuerung und Administrator-/Root-Aktionen. Projektänderungen sind auf kleine, gesicherte Dateioperationen im Pi-Control-Arbeitsordner beschränkt. Löschungen, Befehle und App-Starts benötigen weiterhin ausdrückliche Bestätigung im Pi-Control-UI.
 
 ## Start
 
@@ -34,9 +37,9 @@ Geschützte Endpunkte:
 - `GET /v1/files?path=...` – direkten Ordnerinhalt auflisten
 - `POST /v1/open` – nur erlaubte Programme
 - `POST /v1/tests` – vorhandenen Speichertest starten
-- `POST /v1/agent/run` – einen validierten Plan mit 1–8 sicheren Schritten ausführen und im Gedächtnis protokollieren. Beispiel-Body: `{"title":"Projekt prüfen","goal":"Status und README kontrollieren","steps":[{"action":"git_status"},{"action":"read_file","path":"README.md"}]}`. Erlaubt sind nur `status`, `git_status`, `git_diff`, `read_file`, `list_files` und `tests`.
+- `POST /v1/agent/run` – einen validierten Plan mit 1–8 sicheren Schritten ausführen und im Gedächtnis protokollieren. Erlaubt sind Status-/Git-Prüfungen, freigegebene Datei-Lesezugriffe, `python_syntax`, `test_file`, `flutter_test`, `write_file` und `replace_text`.
 
-Alle Anfragen benötigen `Authorization: Bearer <Token>`. Der Plan-Endpunkt akzeptiert keine Shell-Befehle, Dateiänderungen, Löschungen oder App-Starts; diese bleiben außerhalb des automatischen Planläufers und benötigen weiterhin gesonderte Freigabe.
+Alle Anfragen benötigen `Authorization: Bearer <Token>`. Der Plan-Endpunkt akzeptiert keine Shell-Befehle, Löschungen oder App-Starts; diese bleiben außerhalb des automatischen Planläufers und benötigen weiterhin gesonderte Freigabe. `flutter_test` führt genau eine bestehende `*_test.dart`-Datei unter `app/test/` mit `flutter test --no-pub` aus; Flutter muss bereits installiert sein.
 
 ## Dateizugriff und Schutz
 

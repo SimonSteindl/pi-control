@@ -29,7 +29,7 @@ class _AiChatViewState extends State<AiChatView> {
   final Map<int, String> _actionResults = {};
   final Set<int> _actionBusy = {};
   List<Map<String, dynamic>> _memories = [];
-  String _model = 'qwen3:1.7b';
+  String _model = 'qwen3.5:4b';
   bool _busy = false;
   bool _loadingMemories = false;
   bool _checkingPcAgent = false;
@@ -65,10 +65,14 @@ class _AiChatViewState extends State<AiChatView> {
       setState(() {
         _messages
           ..clear()
-          ..addAll(decoded.whereType<Map>().map((item) => {
-            'role': '${item['role'] ?? 'assistant'}',
-            'content': '${item['content'] ?? ''}',
-          }));
+          ..addAll(
+            decoded.whereType<Map>().map(
+              (item) => {
+                'role': '${item['role'] ?? 'assistant'}',
+                'content': '${item['content'] ?? ''}',
+              },
+            ),
+          );
       });
       _scrollToBottom();
     } catch (_) {
@@ -101,7 +105,10 @@ class _AiChatViewState extends State<AiChatView> {
       if (mounted) {
         setState(() {
           _memories = values is List
-              ? values.whereType<Map>().map((value) => Map<String, dynamic>.from(value)).toList()
+              ? values
+                    .whereType<Map>()
+                    .map((value) => Map<String, dynamic>.from(value))
+                    .toList()
               : <Map<String, dynamic>>[];
         });
       }
@@ -128,7 +135,9 @@ class _AiChatViewState extends State<AiChatView> {
         _pcAgentStatusText = connected
             ? (_en ? 'PC-Agent connected' : 'PC-Agent verbunden')
             : (data['error']?.toString() ??
-                (_en ? 'PC-Agent not connected' : 'PC-Agent nicht verbunden'));
+                  (_en
+                      ? 'PC-Agent not connected'
+                      : 'PC-Agent nicht verbunden'));
       });
     } catch (error) {
       if (mounted) {
@@ -163,32 +172,91 @@ class _AiChatViewState extends State<AiChatView> {
     _scrollToBottom();
 
     try {
-      final response = await widget.client.post(
-        'ai/chat',
+      final startResponse = await widget.client.post(
+        'ai/chat/jobs',
         headers: const {'Content-Type': 'application/json'},
         body: jsonEncode({'model': _model, 'messages': boundedHistory}),
-        timeout: const Duration(seconds: 160),
+        timeout: const Duration(seconds: 15),
       );
-      if (response.statusCode != 200) {
-        throw widget.client.responseException(response);
+      if (startResponse.statusCode != 202) {
+        throw widget.client.responseException(startResponse);
       }
-      final data = widget.client.decodeObject(response);
-      final message = data['message'];
+      final jobId = widget.client
+          .decodeObject(startResponse)['job_id']
+          ?.toString();
+      if (jobId == null || jobId.isEmpty) {
+        throw ApiException(
+          _en
+              ? 'The AI task could not be started.'
+              : 'Die KI-Aufgabe konnte nicht gestartet werden.',
+        );
+      }
+
+      Map<String, dynamic>? data;
+      final deadline = DateTime.now().add(const Duration(minutes: 30));
+      while (data == null && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(seconds: 2));
+        final statusResponse = await widget.client.get(
+          'ai/chat/jobs/${Uri.encodeComponent(jobId)}',
+          timeout: const Duration(seconds: 15),
+        );
+        if (statusResponse.statusCode != 200) {
+          throw widget.client.responseException(statusResponse);
+        }
+        final status = widget.client.decodeObject(statusResponse);
+        if (status['status'] == 'failed') {
+          final result = status['result'];
+          final message = result is Map ? result['error']?.toString() : null;
+          throw ApiException(
+            message ??
+                (_en
+                    ? 'The AI task failed.'
+                    : 'Die KI-Aufgabe ist fehlgeschlagen.'),
+          );
+        }
+        if (status['status'] == 'completed') {
+          final result = status['result'];
+          if (result is! Map) {
+            throw ApiException(
+              _en
+                  ? 'The AI returned an invalid result.'
+                  : 'Die KI hat ein ungültiges Ergebnis geliefert.',
+            );
+          }
+          data = Map<String, dynamic>.from(result);
+        }
+      }
+      if (data == null) {
+        throw ApiException(
+          _en
+              ? 'The AI task is taking too long. Check the chat again shortly.'
+              : 'Die KI-Aufgabe dauert länger. Bitte prüfe den Chat gleich noch einmal.',
+        );
+      }
+      final completedData = data;
+      final message = completedData['message'];
       final content = message is Map ? message['content']?.toString() : null;
       if (content == null || content.trim().isEmpty) {
-        throw ApiException(_en ? 'The AI returned an empty answer.' : 'Die KI hat keine Antwort geliefert.');
+        throw ApiException(
+          _en
+              ? 'The AI returned an empty answer.'
+              : 'Die KI hat keine Antwort geliefert.',
+        );
       }
       if (!mounted) return;
       setState(() {
         final index = _messages.length;
         _messages.add({'role': 'assistant', 'content': content.trim()});
-        final action = data['action_request'];
+        final action = completedData['action_request'];
         if (action is Map) {
           _actionRequests[index] = Map<String, dynamic>.from(action);
         }
       });
       await _saveChat();
-      if (RegExp(r'^\s*(merk(?:e)?\s+dir|speicher|remember)', caseSensitive: false).hasMatch(text)) {
+      if (RegExp(
+        r'^\s*(merk(?:e)?\s+dir|speicher|remember)',
+        caseSensitive: false,
+      ).hasMatch(text)) {
         await _loadMemories();
       }
       _scrollToBottom();
@@ -203,18 +271,26 @@ class _AiChatViewState extends State<AiChatView> {
     final type = '${action['action'] ?? ''}';
     if (_en) {
       switch (type) {
-        case 'write_file': return 'Write or replace a file';
-        case 'delete_file': return 'Move file/folder to agent trash';
-        case 'run_command': return 'Run command on your PC';
-        case 'open': return 'Open an application';
+        case 'write_file':
+          return 'Write or replace a file';
+        case 'delete_file':
+          return 'Move file/folder to agent trash';
+        case 'run_command':
+          return 'Run command on your PC';
+        case 'open':
+          return 'Open an application';
       }
       return 'PC action';
     }
     switch (type) {
-      case 'write_file': return 'Datei schreiben/überschreiben';
-      case 'delete_file': return 'Datei/Ordner in den Agent-Papierkorb verschieben';
-      case 'run_command': return 'Befehl auf deinem PC ausführen';
-      case 'open': return 'Programm öffnen';
+      case 'write_file':
+        return 'Datei schreiben/überschreiben';
+      case 'delete_file':
+        return 'Datei/Ordner in den Agent-Papierkorb verschieben';
+      case 'run_command':
+        return 'Befehl auf deinem PC ausführen';
+      case 'open':
+        return 'Programm öffnen';
     }
     return 'PC-Aktion';
   }
@@ -229,7 +305,8 @@ class _AiChatViewState extends State<AiChatView> {
       final content = '${action['content'] ?? ''}';
       return 'Pfad: ${action['path'] ?? ''}\n\nVollständiger Inhalt:\n$content';
     }
-    if (type == 'delete_file') return 'Pfad: ${action['path'] ?? ''}\n\nDer Eintrag wird in den Agent-Papierkorb verschoben, nicht sofort endgültig gelöscht.';
+    if (type == 'delete_file')
+      return 'Pfad: ${action['path'] ?? ''}\n\nDer Eintrag wird in den Agent-Papierkorb verschoben, nicht sofort endgültig gelöscht.';
     if (type == 'open') return 'Programm: ${action['app'] ?? ''}';
     return '${action['path'] ?? ''}';
   }
@@ -238,7 +315,9 @@ class _AiChatViewState extends State<AiChatView> {
     if (!mounted) return;
     setState(() {
       _actionRequests.remove(index);
-      _actionResults[index] = _en ? 'Rejected. Nothing was executed.' : 'Abgelehnt. Es wurde nichts ausgeführt.';
+      _actionResults[index] = _en
+          ? 'Rejected. Nothing was executed.'
+          : 'Abgelehnt. Es wurde nichts ausgeführt.';
     });
   }
 
@@ -256,7 +335,9 @@ class _AiChatViewState extends State<AiChatView> {
       );
       final data = widget.client.decodeObject(response);
       if (response.statusCode != 200 || data['ok'] != true) {
-        throw ApiException('${data['error'] ?? (_en ? 'PC action failed.' : 'PC-Aktion fehlgeschlagen.')}');
+        throw ApiException(
+          '${data['error'] ?? (_en ? 'PC action failed.' : 'PC-Aktion fehlgeschlagen.')}',
+        );
       }
       final result = (data['output']?.toString().trim().isNotEmpty ?? false)
           ? data['output'].toString()
@@ -264,13 +345,16 @@ class _AiChatViewState extends State<AiChatView> {
       if (!mounted) return;
       setState(() {
         _actionRequests.remove(index);
-        _actionResults[index] = result.length > 5000 ? '${result.substring(0, 5000)}…' : result;
+        _actionResults[index] = result.length > 5000
+            ? '${result.substring(0, 5000)}…'
+            : result;
       });
     } catch (error) {
       if (mounted) {
         setState(() {
           _actionRequests.remove(index);
-          _actionResults[index] = '${_en ? 'Action failed' : 'Aktion fehlgeschlagen'}: $error';
+          _actionResults[index] =
+              '${_en ? 'Action failed' : 'Aktion fehlgeschlagen'}: $error';
         });
       }
     } finally {
@@ -330,7 +414,13 @@ class _AiChatViewState extends State<AiChatView> {
               ),
               Expanded(
                 child: _memories.isEmpty
-                    ? Center(child: Text(_en ? 'No saved memories yet.' : 'Noch keine Erinnerungen gespeichert.'))
+                    ? Center(
+                        child: Text(
+                          _en
+                              ? 'No saved memories yet.'
+                              : 'Noch keine Erinnerungen gespeichert.',
+                        ),
+                      )
                     : ListView.separated(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         itemCount: _memories.length,
@@ -339,17 +429,23 @@ class _AiChatViewState extends State<AiChatView> {
                           final item = _memories[index];
                           return ListTile(
                             leading: const Icon(Icons.bookmark_outline_rounded),
-                            title: Text('${item['memory'] ?? item['content'] ?? item['text'] ?? ''}'),
+                            title: Text(
+                              '${item['memory'] ?? item['content'] ?? item['text'] ?? ''}',
+                            ),
                             trailing: IconButton(
-                              tooltip: _en ? 'Delete memory' : 'Erinnerung löschen',
+                              tooltip: _en
+                                  ? 'Delete memory'
+                                  : 'Erinnerung löschen',
                               icon: const Icon(Icons.delete_outline_rounded),
                               onPressed: () async {
                                 try {
                                   await _deleteMemory(item);
-                                  if (sheetContext.mounted) Navigator.pop(sheetContext);
+                                  if (sheetContext.mounted)
+                                    Navigator.pop(sheetContext);
                                   await _showMemories();
                                 } catch (error) {
-                                  if (mounted) setState(() => _error = error.toString());
+                                  if (mounted)
+                                    setState(() => _error = error.toString());
                                 }
                               },
                             ),
@@ -372,10 +468,12 @@ class _AiChatViewState extends State<AiChatView> {
       if (match.start > cursor) {
         spans.add(TextSpan(text: content.substring(cursor, match.start)));
       }
-      spans.add(TextSpan(
-        text: match.group(1),
-        style: const TextStyle(fontWeight: FontWeight.bold),
-      ));
+      spans.add(
+        TextSpan(
+          text: match.group(1),
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+      );
       cursor = match.end;
     }
     if (cursor < content.length) {
@@ -392,260 +490,384 @@ class _AiChatViewState extends State<AiChatView> {
       bottom: true,
       child: Padding(
         padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Row(
-                children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: widget.accentColor.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: widget.accentColor.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Icon(
+                        Icons.auto_awesome_rounded,
+                        color: widget.accentColor,
+                      ),
                     ),
-                    child: Icon(Icons.auto_awesome_rounded, color: widget.accentColor),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Pi-Control AI', style: theme.textTheme.titleLarge),
-                        Text(_en ? 'Private assistant' : 'Dein privater Assistent', style: theme.textTheme.bodySmall),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: _pcAgentStatusText ??
-                        (_en ? 'Check PC-Agent connection' : 'PC-Agent-Verbindung prüfen'),
-                    onPressed: _checkingPcAgent ? null : _loadPcAgentStatus,
-                    icon: _checkingPcAgent
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : Icon(
-                            Icons.computer_rounded,
-                            color: _pcAgentConnected == true
-                                ? Colors.green
-                                : _pcAgentConnected == false
-                                    ? theme.colorScheme.error
-                                    : null,
-                          ),
-                  ),
-                  IconButton(
-                    tooltip: _en ? 'Saved memories' : 'Erinnerungen',
-                    onPressed: _showMemories,
-                    icon: Badge(
-                      label: Text('${_memories.length}'),
-                      isLabelVisible: _memories.isNotEmpty,
-                      child: const Icon(Icons.psychology_alt_outlined),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Text(_en ? 'Model' : 'Modell'),
-              const SizedBox(width: 10),
-              DropdownButton<String>(
-                value: _model,
-                onChanged: _busy ? null : (value) {
-                  if (value != null) setState(() => _model = value);
-                },
-                items: const [
-                  DropdownMenuItem(value: 'qwen3:1.7b', child: Text('Qwen3 1.7B')),
-                  DropdownMenuItem(value: 'qwen3:4b', child: Text('Qwen3 4B')),
-                ],
-              ),
-              const Spacer(),
-              TextButton.icon(
-                onPressed: _busy || _messages.isEmpty ? null : () async {
-                  setState(() {
-                    _messages.clear();
-                    _actionRequests.clear();
-                    _actionResults.clear();
-                    _actionBusy.clear();
-                    _error = null;
-                  });
-                  await _saveChat();
-                },
-                icon: const Icon(Icons.delete_sweep_outlined),
-                label: Text(_en ? 'Clear' : 'Leeren'),
-              ),
-            ],
-          ),
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Material(
-                color: theme.colorScheme.errorContainer,
-                borderRadius: BorderRadius.circular(12),
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Text(_error!, style: TextStyle(color: theme.colorScheme.onErrorContainer)),
-                ),
-              ),
-            ),
-          Expanded(
-            child: _messages.isEmpty
-                ? Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 420),
+                    const SizedBox(width: 12),
+                    Expanded(
                       child: Column(
-                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(Icons.forum_outlined, size: 56, color: widget.accentColor),
-                          const SizedBox(height: 12),
-                          Text(_en ? 'What can I help you with?' : 'Wobei kann ich dir helfen?', style: theme.textTheme.titleLarge, textAlign: TextAlign.center),
-                          const SizedBox(height: 8),
+                          Text(
+                            'Pi-Control AI',
+                            style: theme.textTheme.titleLarge,
+                          ),
                           Text(
                             _en
-                                ? 'Ask a question or say “Remember …” to save a memory.'
-                                : 'Stell eine Frage oder schreibe „Merk dir …“, um eine Erinnerung zu speichern.',
-                            textAlign: TextAlign.center,
+                                ? 'Private assistant'
+                                : 'Dein privater Assistent',
+                            style: theme.textTheme.bodySmall,
                           ),
                         ],
                       ),
                     ),
-                  )
-                : ListView.builder(
-                    controller: _scroll,
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    itemCount: _messages.length + (_busy ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      if (_busy && index == _messages.length) {
-                        return const Align(
-                          alignment: Alignment.centerLeft,
-                          child: Padding(
-                            padding: EdgeInsets.all(12),
-                            child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
-                          ),
-                        );
-                      }
-                      final message = _messages[index];
-                      final isUser = message['role'] == 'user';
-                      return Align(
-                        alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 760),
-                          child: Card(
-                            color: isUser
-                                ? widget.accentColor.withValues(alpha: 0.16)
-                                : theme.colorScheme.surfaceContainerHighest,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  SelectableText.rich(_formatMessage(message['content'] ?? '', theme.textTheme.bodyMedium)),
-                                  if (_actionRequests.containsKey(index)) ...[
-                                    const SizedBox(height: 12),
-                                    Container(
-                                      width: double.infinity,
-                                      padding: const EdgeInsets.all(12),
-                                      decoration: BoxDecoration(
-                                        border: Border.all(color: theme.colorScheme.error.withValues(alpha: 0.55)),
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              Icon(Icons.warning_amber_rounded, color: theme.colorScheme.error),
-                                              const SizedBox(width: 8),
-                                              Expanded(child: Text(_actionTitle(_actionRequests[index]!), style: theme.textTheme.titleSmall)),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 8),
-                                          SelectableText(_actionDetails(_actionRequests[index]!)),
-                                          const SizedBox(height: 10),
-                                          Text(
-                                            _en
-                                                ? 'This action will not run unless you approve it.'
-                                                : 'Diese Aktion wird erst nach deiner Bestätigung ausgeführt.',
-                                            style: theme.textTheme.bodySmall,
-                                          ),
-                                          const SizedBox(height: 10),
-                                          Row(
-                                            mainAxisAlignment: MainAxisAlignment.end,
-                                            children: [
-                                              TextButton(
-                                                onPressed: _actionBusy.contains(index) ? null : () => _rejectAction(index),
-                                                child: Text(_en ? 'Reject' : 'Ablehnen'),
-                                              ),
-                                              const SizedBox(width: 8),
-                                              FilledButton.icon(
-                                                onPressed: _actionBusy.contains(index) ? null : () => _approveAction(index),
-                                                icon: _actionBusy.contains(index)
-                                                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                                                    : const Icon(Icons.check_rounded),
-                                                label: Text(_en ? 'Approve and run' : 'Bestätigen & ausführen'),
-                                              ),
-                                            ],
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                  if (_actionResults.containsKey(index)) ...[
-                                    const SizedBox(height: 10),
-                                    Container(
-                                      width: double.infinity,
-                                      padding: const EdgeInsets.all(10),
-                                      decoration: BoxDecoration(
-                                        color: theme.colorScheme.surface,
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      child: SelectableText(_actionResults[index]!),
-                                    ),
-                                  ],
-                                ],
-                              ),
+                    IconButton(
+                      tooltip:
+                          _pcAgentStatusText ??
+                          (_en
+                              ? 'Check PC-Agent connection'
+                              : 'PC-Agent-Verbindung prüfen'),
+                      onPressed: _checkingPcAgent ? null : _loadPcAgentStatus,
+                      icon: _checkingPcAgent
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Icon(
+                              Icons.computer_rounded,
+                              color: _pcAgentConnected == true
+                                  ? Colors.green
+                                  : _pcAgentConnected == false
+                                  ? theme.colorScheme.error
+                                  : null,
                             ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _input,
-                  minLines: 1,
-                  maxLines: 5,
-                  textInputAction: TextInputAction.send,
-                  onSubmitted: (_) => _send(),
-                  decoration: InputDecoration(
-                    hintText: _en ? 'Message Pi-Control AI…' : 'Nachricht an Pi-Control AI…',
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(18)),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    ),
+                    IconButton(
+                      tooltip: _en ? 'Saved memories' : 'Erinnerungen',
+                      onPressed: _showMemories,
+                      icon: Badge(
+                        label: Text('${_memories.length}'),
+                        isLabelVisible: _memories.isNotEmpty,
+                        child: const Icon(Icons.psychology_alt_outlined),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Text(_en ? 'Model' : 'Modell'),
+                const SizedBox(width: 10),
+                DropdownButton<String>(
+                  value: _model,
+                  onChanged: _busy
+                      ? null
+                      : (value) {
+                          if (value != null) setState(() => _model = value);
+                        },
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'qwen3:1.7b',
+                      child: Text('Qwen3 1.7B'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'qwen3:4b',
+                      child: Text('Qwen3 4B'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'qwen3.5:4b',
+                      child: Text('Qwen3.5 4B'),
+                    ),
+                  ],
+                ),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: _busy || _messages.isEmpty
+                      ? null
+                      : () async {
+                          setState(() {
+                            _messages.clear();
+                            _actionRequests.clear();
+                            _actionResults.clear();
+                            _actionBusy.clear();
+                            _error = null;
+                          });
+                          await _saveChat();
+                        },
+                  icon: const Icon(Icons.delete_sweep_outlined),
+                  label: Text(_en ? 'Clear' : 'Leeren'),
+                ),
+              ],
+            ),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Material(
+                  color: theme.colorScheme.errorContainer,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(
+                      _error!,
+                      style: TextStyle(
+                        color: theme.colorScheme.onErrorContainer,
+                      ),
+                    ),
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
-              IconButton.filled(
-                onPressed: _busy ? null : _send,
-                icon: const Icon(Icons.send_rounded),
-                tooltip: _en ? 'Send' : 'Senden',
-              ),
-            ],
-          ),
-        ],
-      ),
+            Expanded(
+              child: _messages.isEmpty
+                  ? Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 420),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.forum_outlined,
+                              size: 56,
+                              color: widget.accentColor,
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              _en
+                                  ? 'What can I help you with?'
+                                  : 'Wobei kann ich dir helfen?',
+                              style: theme.textTheme.titleLarge,
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _en
+                                  ? 'Ask a question or say “Remember …” to save a memory.'
+                                  : 'Stell eine Frage oder schreibe „Merk dir …“, um eine Erinnerung zu speichern.',
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : ListView.builder(
+                      controller: _scroll,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      itemCount: _messages.length + (_busy ? 1 : 0),
+                      itemBuilder: (context, index) {
+                        if (_busy && index == _messages.length) {
+                          return const Align(
+                            alignment: Alignment.centerLeft,
+                            child: Padding(
+                              padding: EdgeInsets.all(12),
+                              child: SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            ),
+                          );
+                        }
+                        final message = _messages[index];
+                        final isUser = message['role'] == 'user';
+                        return Align(
+                          alignment: isUser
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 760),
+                            child: Card(
+                              color: isUser
+                                  ? widget.accentColor.withValues(alpha: 0.16)
+                                  : theme.colorScheme.surfaceContainerHighest,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 10,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SelectableText.rich(
+                                      _formatMessage(
+                                        message['content'] ?? '',
+                                        theme.textTheme.bodyMedium,
+                                      ),
+                                    ),
+                                    if (_actionRequests.containsKey(index)) ...[
+                                      const SizedBox(height: 12),
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          border: Border.all(
+                                            color: theme.colorScheme.error
+                                                .withValues(alpha: 0.55),
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Icon(
+                                                  Icons.warning_amber_rounded,
+                                                  color:
+                                                      theme.colorScheme.error,
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Expanded(
+                                                  child: Text(
+                                                    _actionTitle(
+                                                      _actionRequests[index]!,
+                                                    ),
+                                                    style: theme
+                                                        .textTheme
+                                                        .titleSmall,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 8),
+                                            SelectableText(
+                                              _actionDetails(
+                                                _actionRequests[index]!,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 10),
+                                            Text(
+                                              _en
+                                                  ? 'This action will not run unless you approve it.'
+                                                  : 'Diese Aktion wird erst nach deiner Bestätigung ausgeführt.',
+                                              style: theme.textTheme.bodySmall,
+                                            ),
+                                            const SizedBox(height: 10),
+                                            Row(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.end,
+                                              children: [
+                                                TextButton(
+                                                  onPressed:
+                                                      _actionBusy.contains(
+                                                        index,
+                                                      )
+                                                      ? null
+                                                      : () => _rejectAction(
+                                                          index,
+                                                        ),
+                                                  child: Text(
+                                                    _en ? 'Reject' : 'Ablehnen',
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 8),
+                                                FilledButton.icon(
+                                                  onPressed:
+                                                      _actionBusy.contains(
+                                                        index,
+                                                      )
+                                                      ? null
+                                                      : () => _approveAction(
+                                                          index,
+                                                        ),
+                                                  icon:
+                                                      _actionBusy.contains(
+                                                        index,
+                                                      )
+                                                      ? const SizedBox(
+                                                          width: 16,
+                                                          height: 16,
+                                                          child:
+                                                              CircularProgressIndicator(
+                                                                strokeWidth: 2,
+                                                              ),
+                                                        )
+                                                      : const Icon(
+                                                          Icons.check_rounded,
+                                                        ),
+                                                  label: Text(
+                                                    _en ? 'Approve and run' : 'Bestätigen & ausführen',
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                    if (_actionResults.containsKey(index)) ...[
+                                      const SizedBox(height: 10),
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.all(10),
+                                        decoration: BoxDecoration(
+                                          color: theme.colorScheme.surface,
+                                          borderRadius: BorderRadius.circular(
+                                            10,
+                                          ),
+                                        ),
+                                        child: SelectableText(
+                                          _actionResults[index]!,
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _input,
+                    minLines: 1,
+                    maxLines: 5,
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _send(),
+                    decoration: InputDecoration(
+                      hintText: _en
+                          ? 'Message Pi-Control AI…'
+                          : 'Nachricht an Pi-Control AI…',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  onPressed: _busy ? null : _send,
+                  icon: const Icon(Icons.send_rounded),
+                  tooltip: _en ? 'Send' : 'Senden',
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -2,6 +2,7 @@
 
 import base64
 from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
 import datetime
 import hashlib
 import html
@@ -90,6 +91,12 @@ system_status_cached_at = 0.0
 SYSTEM_STATUS_CACHE_SECONDS = 30
 
 BENCHMARK_HISTORY_MAX_POINTS = 50
+
+AI_CHAT_JOB_LOCK = threading.Lock()
+AI_CHAT_JOBS = {}
+AI_CHAT_JOB_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ai-chat")
+AI_CHAT_JOB_TTL_SECONDS = 60 * 60
+AI_CHAT_JOB_MAX_COUNT = 64
 
 FILE_ROOT = Path(USB_PATH)
 MOUNTINFO_FILE = Path("/proc/self/mountinfo")
@@ -1915,7 +1922,7 @@ def is_ai_memory_recall_request(message):
 
 
 def is_explicit_safe_pc_task_request(message):
-    """Recognize explicit requests for safe, read-only PC tasks."""
+    """Recognize explicit requests for bounded project inspection or repair."""
     text = str(message or "").strip()
 
     if re.match(
@@ -1925,25 +1932,61 @@ def is_explicit_safe_pc_task_request(message):
     ):
         return False
 
+    text = re.sub(r"^(?:(?:bitte|hey)\s+)+", "", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"^(?:kannst|könntest|koenntest|würdest|wuerdest)\s+du\s+",
+        "", text, flags=re.IGNORECASE,
+    )
+    text = re.sub(r"^(?:(?:bitte|hey)\s+)+", "", text, flags=re.IGNORECASE)
+
     verb = (
         r"(?:prüf\w*|pruef\w*|kontrollier\w*|zeige|zeig|liste|lies|lese|"
-        r"check|inspect|show|list|teste\w*|führe\s+aus|fuehre\s+aus)"
+        r"check|inspect|show|list|teste\w*|führ\w*|fuehr\w*|"
+        r"finde|find\w*|such\w*|diagnostizier\w*|reparier\w*|repair\w*|beheb\w*|fix\w*|"
+        r"implementier\w*|entwickel\w*|füge\w*|fuege\w*|add|erstell\w*|create|baue)"
     )
     target = (
-        r".*(?:git|status|diff|datei\w*|ordner\w*|verzeichnis\w*|"
+        r"(?:git|status|diff|datei\w*|ordner\w*|verzeichnis\w*|projekt\w*|"
         r"tests?|pc.agent|agent.status|speicher|memory|gedächtnis|"
-        r"gedaechtnis|systemstatus)"
+        r"gedaechtnis|systemstatus|python(?:[_\s-]*syntax)?|syntax|"
+        r"fehler\w*|error\w*|problem\w*|bugs?|code|feature\w*|funktion\w*|apps?|spiel\w*|games?)"
     )
 
-    direct = re.match(verb + target, text, flags=re.IGNORECASE)
-    polite = re.match(
-        r"^(?:kannst du|könntest du|koenntest du|würdest du|wuerdest du)\b.*"
-        + verb + target,
-        text,
-        flags=re.IGNORECASE,
-    )
-    return bool(direct or polite)
+    # System package installation is an approval-gated action, never an
+    # unattended project task even when the request mentions an app.
+    if re.search(r"\b(?:installier\w*|deinstallier\w*)\b", text, flags=re.IGNORECASE):
+        return False
 
+    pattern = r"\b" + verb + r"\b.*\b" + target + r"\b|\b" + target + r"\b.*\b" + verb + r"\b"
+    return bool(re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL))
+
+
+def is_safe_pc_task_followup(messages):
+    """Route terse test/fix follow-ups only when recent chat establishes project work."""
+    if not isinstance(messages, list) or len(messages) < 2:
+        return False
+    latest = next((
+        item for item in reversed(messages)
+        if isinstance(item, dict) and item.get("role") == "user"
+    ), None)
+    if not isinstance(latest, dict):
+        return False
+    text = str(latest.get("content") or "").strip()
+    if not re.fullmatch(
+        r"(?:bitte\s+)?(?:teste?|prüf\w*|pruef\w*|reparier\w*|beheb\w*|fix|mach|mach\s+weiter|"
+        r"setz\w*\s+fort|weiter)\s+(?:es|das|ihn|sie|weiter)(?:\s+(?:jetzt|zwischendurch|weiter))?[.!?]*",
+        text, flags=re.IGNORECASE,
+    ):
+        return False
+    context = " ".join(
+        str(item.get("content") or "")
+        for item in messages[:-1]
+        if isinstance(item, dict) and item.get("role") in {"user", "assistant"}
+    )[-12000:]
+    return bool(re.search(
+        r"\b(?:python[_ -]?syntax|projekt|code|datei|fehler|problem|bug|feature|reparier\w*|test\w*)\b",
+        context, flags=re.IGNORECASE,
+    ))
 
 
 def is_explicit_pc_action_request(message):
@@ -2021,16 +2064,41 @@ PC_AGENT_TOOL = {
 }
 
 
+def normalize_pc_agent_task_steps(raw_steps):
+    """Normalize harmless extra fields on known PC-Agent actions."""
+    if not isinstance(raw_steps, list):
+        return raw_steps
+
+    normalized_steps = []
+    read_only_actions = {
+        "status", "git_status", "git_diff",
+        "read_file", "list_files", "tests", "test_file", "flutter_test", "python_syntax",
+    }
+
+    for step in raw_steps:
+        if not isinstance(step, dict):
+            normalized_steps.append(step)
+            continue
+
+        normalized = dict(step)
+        action = normalized.get("action")
+
+        if action not in {"read_file", "list_files", "write_file", "replace_text", "test_file", "flutter_test", "git_diff"}:
+            normalized.pop("path", None)
+
+        if action in read_only_actions:
+            normalized.pop("content", None)
+
+        normalized_steps.append(normalized)
+
+    return normalized_steps
+
+
 PC_AGENT_TASK_TOOL = {
     "type": "function",
     "function": {
         "name": "run_safe_pc_task",
-        "description": (
-            "Execute a user-requested multi-step PC task using only safe, read-only operations. "
-            "Use for inspecting status, Git status/diff, reading allowed files, listing allowed folders, "
-            "or running the fixed memory test. Never use for edits, deletes, arbitrary commands, or app launches. "
-            "Only call when the user explicitly asks you to perform a task, not for general questions."
-        ),
+        "description": "Execute a user-requested bounded multi-step PC task. Never delete files, run arbitrary commands, install packages, launch apps, commit, or push.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -2045,9 +2113,13 @@ PC_AGENT_TASK_TOOL = {
                         "properties": {
                             "action": {
                                 "type": "string",
-                                "enum": ["status", "git_status", "git_diff", "read_file", "list_files", "tests"]
+                                "description": "Bei test_file und flutter_test muss path die einzelne Testdatei angeben. Für flutter_test den vollständigen Pfad app/test/..._test.dart verwenden.",
+                                "enum": ["status", "git_status", "git_diff", "read_file", "list_files", "tests", "test_file", "flutter_test", "write_file", "replace_text", "python_syntax"]
                             },
-                            "path": {"type": "string", "maxLength": 1000}
+                            "path": {"type": "string", "maxLength": 1000, "description": "Vollständiger relativer Projektpfad; bei Flutter-Tests app/test/<datei>_test.dart."},
+                            "content": {"type": "string", "maxLength": 20000},
+                            "old_text": {"type": "string", "maxLength": 20000},
+                            "new_text": {"type": "string", "maxLength": 20000}
                         },
                         "required": ["action"],
                         "additionalProperties": False
@@ -2059,7 +2131,6 @@ PC_AGENT_TASK_TOOL = {
         }
     }
 }
-
 
 def pc_agent_memory_start(title, goal):
     """Best-effort task journaling; memory outages must never block an approved action."""
@@ -2127,6 +2198,282 @@ def pc_agent_request(path, payload=None, timeout=15):
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         app.logger.warning("Pi-Control PC-Agent nicht erreichbar: %s", exc)
         return {"ok": False, "error": "PC-Agent nicht erreichbar. Prüfe Tailscale, Firewall und Agent-Dienst."}, 502
+
+
+MAX_SAFE_PC_PLAN_ROUNDS = 3
+
+
+def execute_pc_agent_plan(arguments, *, timeout=200):
+    """Validate through the PC-Agent and execute one bounded safe plan."""
+    if not isinstance(arguments, dict):
+        return {"ok": False, "http_status": 502, "error": "Der Aufgabenplan ist ungültig.", "actions": []}
+    raw_steps = normalize_pc_agent_task_steps(arguments.get("steps"))
+    title = arguments.get("title")
+    task_payload = {
+        "title": title.strip()[:200] if isinstance(title, str) and title.strip() else "Sichere PC-Aufgabe",
+        "goal": arguments.get("goal"),
+        "steps": raw_steps,
+    }
+    actions = [step.get("action") for step in raw_steps if isinstance(step, dict)] if isinstance(raw_steps, list) else []
+    python_changes = any(
+        isinstance(step, dict)
+        and step.get("action") in {"write_file", "replace_text"}
+        and isinstance(step.get("path"), str)
+        and step["path"].lower().endswith(".py")
+        for step in raw_steps
+    ) if isinstance(raw_steps, list) else False
+    if python_changes and "python_syntax" not in actions and len(raw_steps) < 8:
+        raw_steps.append({"action": "python_syntax"})
+        actions.append("python_syntax")
+    task_result, task_status = pc_agent_request("/v1/agent/run", task_payload, timeout=timeout)
+    succeeded = task_status < 400 and task_result.get("ok") is True
+    if python_changes and "python_syntax" not in actions and succeeded:
+        remaining = max(1, timeout - 1)
+        syntax_result, syntax_status = pc_agent_request(
+            "/v1/agent/run",
+            {"title": "Python-Syntaxprüfung nach Änderung", "goal": "Prüfe Python-Syntax nach der Projektänderung.", "steps": [{"action": "python_syntax"}]},
+            timeout=remaining,
+        )
+        syntax_ok = syntax_status < 400 and syntax_result.get("ok") is True
+        merged_results = task_result.get("results")
+        if not isinstance(merged_results, list):
+            merged_results = []
+            task_result["results"] = merged_results
+        syntax_results = syntax_result.get("results", [])
+        if isinstance(syntax_results, list):
+            merged_results.extend(syntax_results)
+        task_result["ok"] = syntax_ok
+        task_result["status"] = "completed" if syntax_ok else "failed"
+        task_status = syntax_status
+        actions.append("python_syntax")
+        succeeded = succeeded and syntax_ok
+    write_audit(
+        "ai.pc_task.executed", task_payload["title"],
+        {"ok": succeeded, "http_status": task_status},
+    )
+    changed_paths = []
+    raw_results = task_result.get("results", [])
+    if isinstance(raw_results, list):
+        for step_result in raw_results:
+            if not isinstance(step_result, dict) or step_result.get("ok") is not True:
+                continue
+            label = str(step_result.get("step") or "")
+            if any(action in label for action in ("write_file", "replace_text")):
+                changed_path = step_result.get("path")
+                if isinstance(changed_path, str):
+                    changed_paths.append(changed_path)
+    return {
+        "ok": succeeded, "http_status": task_status,
+        "task_result": task_result, "actions": actions,
+        "changed_paths": changed_paths,
+    }
+
+
+def _pc_plan_successful_actions(outcome):
+    result = outcome.get("task_result", {})
+    raw_results = result.get("results", []) if isinstance(result, dict) else []
+    actions = []
+    if isinstance(raw_results, list):
+        for item in raw_results:
+            if isinstance(item, dict) and item.get("ok") is True:
+                label = item.get("step")
+                if isinstance(label, str) and " " in label:
+                    actions.append(label.split(" ", 1)[1])
+    return actions
+
+
+def _fill_explicit_test_paths(arguments, messages):
+    """Recover one unambiguous test path explicitly written by the user."""
+    if not isinstance(arguments, dict) or not isinstance(arguments.get("steps"), list):
+        return arguments
+    user_text = " ".join(
+        str(item.get("content") or "") for item in messages
+        if isinstance(item, dict) and item.get("role") == "user"
+    )
+    candidates = set(re.findall(
+        r"(?<![\w./-])(?:app/test/(?:[\w-]+/)*[\w-]+_test\.dart|"
+        r"(?:server|pc_agent|pc-agent)/(?:[\w-]+/)*(?:test[\w-]*|[\w-]+_test)\.py)(?![\w-])",
+        user_text, flags=re.IGNORECASE,
+    ))
+    if not candidates:
+        return arguments
+    repaired = dict(arguments)
+    repaired_steps = []
+    changed = False
+    for original in arguments["steps"]:
+        if not isinstance(original, dict):
+            repaired_steps.append(original)
+            continue
+        step = dict(original)
+        action = step.get("action")
+        matching = [
+            path for path in candidates
+            if (action == "flutter_test" and path.startswith("app/test/") and path.endswith("_test.dart"))
+            or (action == "test_file" and path.endswith(".py"))
+        ]
+        if action in {"flutter_test", "test_file"} and not step.get("path") and len(matching) == 1:
+            step["path"] = matching[0]
+            changed = True
+        repaired_steps.append(step)
+    if changed:
+        repaired["steps"] = repaired_steps
+        return repaired
+    return arguments
+
+
+def _pc_task_result_for_model(outcome, max_chars=18_000):
+    """Keep tool feedback useful while bounding the follow-up prompt size."""
+    result = outcome.get("task_result", {})
+    value = {"ok": outcome.get("ok"), "http_status": outcome.get("http_status"), "results": []}
+    if isinstance(result, dict):
+        value["status"] = result.get("status")
+        value["error"] = result.get("error")
+        raw_results = result.get("results", [])
+        remaining = max_chars
+        if isinstance(raw_results, list):
+            for item in raw_results:
+                if not isinstance(item, dict):
+                    continue
+                compact = {}
+                for key, item_value in item.items():
+                    if key in {"content", "output", "error"} and isinstance(item_value, str):
+                        limit = min(6_000, remaining)
+                        compact[key] = item_value[:limit]
+                        remaining -= len(compact[key])
+                    else:
+                        compact[key] = item_value
+                value["results"].append(compact)
+                if remaining <= 0:
+                    break
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def run_safe_pc_task_conversation(first_message, chat_request, ollama_base, model, deadline):
+    """Let Ollama inspect tool results and plan bounded follow-up actions."""
+    history = []
+    current_message = first_message
+    messages = chat_request["messages"]
+    followup_error = None
+
+    for round_index in range(MAX_SAFE_PC_PLAN_ROUNDS):
+        tool_calls = current_message.get("tool_calls") if isinstance(current_message, dict) else None
+        if not isinstance(tool_calls, list) or not tool_calls:
+            break
+        if len(tool_calls) != 1 or not isinstance(tool_calls[0], dict):
+            followup_error = "Die KI hat mehrere Aktionen auf einmal vorgeschlagen."
+            break
+        call = tool_calls[0].get("function") or {}
+        if call.get("name") != "run_safe_pc_task":
+            followup_error = "Die KI hat eine unbekannte Folgeaktion vorgeschlagen."
+            break
+        arguments = call.get("arguments", {})
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = {}
+        arguments = _fill_explicit_test_paths(arguments, messages)
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 1:
+            followup_error = "Das Zeitlimit für die sichere PC-Aufgabe ist erreicht."
+            break
+        outcome = execute_pc_agent_plan(arguments, timeout=max(1, min(200, remaining)))
+        history.append(outcome)
+        assistant_message = {
+            "role": "assistant",
+            "content": current_message.get("content") or "",
+            "tool_calls": tool_calls,
+        }
+        messages.append(assistant_message)
+        messages.append({
+            "role": "tool", "tool_name": "run_safe_pc_task",
+            "content": _pc_task_result_for_model(outcome),
+        })
+
+        remaining = deadline - time.monotonic()
+        if round_index + 1 >= MAX_SAFE_PC_PLAN_ROUNDS or remaining <= 1:
+            break
+        followup_request = dict(chat_request)
+        if messages and messages[0].get("role") == "system":
+            followup_request["messages"] = [messages[0], *messages[-11:]]
+        else:
+            followup_request["messages"] = messages[-12:]
+        body = json.dumps(followup_request).encode("utf-8")
+        req = urllib.request.Request(
+            f"{ollama_base}/api/chat", data=body,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=min(120, max(1, remaining))) as response:
+                next_result = json.loads(response.read(2 * 1024 * 1024).decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            followup_error = f"Ollama hat die Folgeplanung abgelehnt (HTTP {exc.code})."
+            break
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+            app.logger.warning("Pi-Control AI Folgeplanung fehlgeschlagen: %s", exc)
+            followup_error = "Die KI konnte nach den Prüfergebnissen nicht weiterplanen."
+            break
+        current_message = next_result.get("message") if isinstance(next_result, dict) else None
+        if not isinstance(current_message, dict):
+            followup_error = "Ollama hat keine gültige Folgeantwort geliefert."
+            break
+
+    all_actions = [action for plan in history for action in _pc_plan_successful_actions(plan)]
+    changed_paths = [path for plan in history for path in plan.get("changed_paths", [])]
+    did_change = any(action in {"write_file", "replace_text"} for action in all_actions)
+    did_test = any(action in {"tests", "test_file", "flutter_test"} for action in all_actions)
+    user_messages = [
+        str(item.get("content", "")) for item in messages
+        if isinstance(item, dict) and item.get("role") == "user"
+    ]
+    request_text = " ".join(user_messages[-2:] if is_safe_pc_task_followup(messages) else user_messages[-1:])
+    requests_change = bool(re.search(
+        r"\b(?:reparier\w*|repair\w*|beheb\w*|fix\w*|implementier\w*|entwickel\w*|füge\w*|fuege\w*|add|erstell\w*|create|baue)\b",
+        request_text, flags=re.IGNORECASE,
+    ))
+    latest_plan_ok = bool(history and history[-1].get("ok"))
+    complete = latest_plan_ok and not followup_error
+    if did_change and not did_test:
+        complete = False
+    if requests_change and not did_change:
+        complete = False
+
+    final_message = current_message.get("content", "") if isinstance(current_message, dict) else ""
+    if followup_error:
+        final_message = followup_error + ("\n" + final_message if final_message else "")
+    if requests_change and not did_change:
+        final_message = "Ich habe keine erfolgreiche Reparatur vorgenommen. Es liegt keine bestätigte Dateiänderung vor."
+    elif did_change and not did_test:
+        final_message = "Die Änderung wurde gespeichert, aber kein passender Test wurde erfolgreich abgeschlossen. Der Auftrag ist noch offen."
+    elif not latest_plan_ok:
+        last_result = history[-1].get("task_result", {}) if history else {}
+        detail = last_result.get("error") if isinstance(last_result, dict) else None
+        if not detail and isinstance(last_result, dict):
+            failed_steps = []
+            for item in last_result.get("results", []):
+                if not isinstance(item, dict) or item.get("ok") is not False:
+                    continue
+                reason = item.get("error")
+                if not reason and isinstance(item.get("output"), str):
+                    reason = f"Exit-Code {item.get('exit_code', 'unbekannt')}: {item['output'][-500:].strip()}"
+                if not reason and item.get("exit_code") is not None:
+                    reason = f"Exit-Code {item['exit_code']}"
+                if reason:
+                    failed_steps.append(str(reason))
+            detail = "; ".join(failed_steps) if failed_steps else None
+        final_message = "Der letzte sichere Schritt ist fehlgeschlagen; sein Ergebnis zählt nicht als Erfolg."
+        if detail:
+            final_message += f" Fehler: {str(detail)[:600]}"
+    if not final_message and history:
+        final_message = "Die sicheren Prüfschritte wurden abgeschlossen." if complete else "Die Aufgabe ist noch nicht vollständig abgeschlossen."
+    return {
+        "ok": True, "task_ok": complete, "model": model,
+        "message": {"role": "assistant", "content": final_message.strip()},
+        "task_results": history,
+        "rounds": len(history),
+        "changed_paths": changed_paths,
+    }
 
 
 @app.get("/api/pc-agent/status")
@@ -2200,6 +2547,106 @@ def api_pc_agent_action():
     return jsonify(result), status
 
 
+def _run_ai_chat_job(job_id, payload, user):
+    try:
+        with AI_CHAT_JOB_LOCK:
+            job = AI_CHAT_JOBS.get(job_id)
+            if job is not None:
+                job.update({"status": "running", "updated_at": time.time()})
+        with app.test_request_context("/api/ai/chat", method="POST", json=payload):
+            g.auth_user = user
+            g.auth_permissions = (
+                ALL_PERMISSIONS if bool(user.get("is_admin"))
+                else parse_permissions(user.get("permissions"))
+            )
+            result = api_ai_chat.__wrapped__()
+            if isinstance(result, tuple):
+                response, status = result[0], result[1]
+            else:
+                response, status = result, result.status_code
+            value = response.get_json(silent=True) or {}
+            with AI_CHAT_JOB_LOCK:
+                job = AI_CHAT_JOBS.get(job_id)
+                if job is not None:
+                    job.update({
+                        "status": "completed" if status < 400 else "failed",
+                        "http_status": status,
+                        "result": value,
+                        "updated_at": time.time(),
+                    })
+    except Exception:
+        app.logger.exception("Pi-Control AI-Auftrag fehlgeschlagen")
+        with AI_CHAT_JOB_LOCK:
+            job = AI_CHAT_JOBS.get(job_id)
+            if job is not None:
+                job.update({
+                    "status": "failed",
+                    "http_status": 500,
+                    "result": {"ok": False, "error": "Die KI-Aufgabe ist intern fehlgeschlagen."},
+                    "updated_at": time.time(),
+                })
+
+
+@app.post("/api/ai/chat/jobs")
+@authentication_required()
+def api_ai_chat_job_start():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Ungültige Chat-Anfrage."}), 400
+    now = time.time()
+    user = dict(g.auth_user)
+    with AI_CHAT_JOB_LOCK:
+        expired = [
+            key for key, job in AI_CHAT_JOBS.items()
+            if now - job["updated_at"] > AI_CHAT_JOB_TTL_SECONDS
+        ]
+        for key in expired:
+            AI_CHAT_JOBS.pop(key, None)
+        active_count = sum(
+            job["status"] in {"queued", "running"}
+            for job in AI_CHAT_JOBS.values()
+        )
+        if active_count >= AI_CHAT_JOB_MAX_COUNT:
+            return jsonify({"ok": False, "error": "Zu viele offene KI-Aufgaben. Bitte später erneut versuchen."}), 429
+        job_id = secrets.token_urlsafe(24)
+        AI_CHAT_JOBS[job_id] = {
+            "id": job_id,
+            "user_id": user["id"],
+            "status": "queued",
+            "created_at": now,
+            "updated_at": now,
+        }
+    try:
+        AI_CHAT_JOB_POOL.submit(_run_ai_chat_job, job_id, payload, user)
+    except RuntimeError:
+        with AI_CHAT_JOB_LOCK:
+            AI_CHAT_JOBS.pop(job_id, None)
+        return jsonify({"ok": False, "error": "Der KI-Auftragsdienst ist gerade nicht verfügbar."}), 503
+    return jsonify({"ok": True, "job_id": job_id, "status": "queued"}), 202
+
+
+@app.get("/api/ai/chat/jobs/<job_id>")
+@authentication_required()
+def api_ai_chat_job_status(job_id):
+    now = time.time()
+    with AI_CHAT_JOB_LOCK:
+        expired = [
+            key for key, job in AI_CHAT_JOBS.items()
+            if now - job["updated_at"] > AI_CHAT_JOB_TTL_SECONDS
+        ]
+        for key in expired:
+            AI_CHAT_JOBS.pop(key, None)
+        job = AI_CHAT_JOBS.get(job_id)
+        if job is None or job["user_id"] != g.auth_user["id"]:
+            return jsonify({"ok": False, "error": "KI-Auftrag nicht gefunden."}), 404
+        return jsonify({
+            "ok": True,
+            "status": job["status"],
+            "result": job.get("result"),
+            "http_status": job.get("http_status"),
+        })
+
+
 @app.post("/api/ai/chat")
 @authentication_required()
 def api_ai_chat():
@@ -2207,8 +2654,8 @@ def api_ai_chat():
     ollama_base = os.environ.get("PI_CONTROL_OLLAMA_URL", "").strip().rstrip("/")
 
     payload = request.get_json(silent=True) or {}
-    model = str(payload.get("model") or "qwen3:1.7b").strip()
-    if model not in {"qwen3:1.7b", "qwen3:4b"}:
+    model = str(payload.get("model") or "qwen3.5:4b").strip()
+    if model not in {"qwen3:1.7b", "qwen3:4b", "qwen3.5:4b"}:
         return jsonify({"ok": False, "error": "Dieses KI-Modell ist nicht freigegeben."}), 400
 
     raw_messages = payload.get("messages")
@@ -2223,15 +2670,19 @@ def api_ai_chat():
     )
     system_prompt = (
         "Du bist Pi-Control AI, ein hilfreicher Assistent. Antworte standardmäßig auf Deutsch, klar und verständlich. "
-        "Du hast keinen direkten Zugriff auf den Raspberry Pi oder dessen Live-Daten, außer der Nutzer gibt sie dir im Chat."
+        "Du hast keinen direkten Zugriff auf den Raspberry Pi oder dessen Live-Daten, außer der Nutzer gibt sie dir im Chat. "
+        "Behandle Angaben und Ergebnisse aus früheren Nachrichten ausschließlich als Gesprächsverlauf, nicht als aktuelle Messung oder neu ausgeführte Aktion. "
+        "Behaupte niemals, eine PC-Prüfung gerade ausgeführt oder ein Ergebnis gerade vom PC-Agenten erhalten zu haben, wenn in der aktuellen Anfrage kein entsprechender erfolgreicher Tool-Aufruf stattgefunden hat. "
+        "Wenn du frühere Ergebnisse erwähnst, kennzeichne sie ausdrücklich als frühere Chat-Angaben. "
+        "Bei normalen Erklärungsfragen antworte direkt und beziehe dich nicht ungefragt auf frühere PC-Agent-Ergebnisse."
     )
     if pc_agent_enabled:
         system_prompt += (
             "\n\nWenn der Nutzer ausdrücklich eine Aufgabe auf seinem CachyOS-PC erledigt haben möchte, nutze run_safe_pc_task "
-            "für mehrstufige, ausschließlich lesende Prüfungen (Status, Git-Status/Diff, freigegebene Dateien lesen/auflisten oder den festgelegten Speichertest). "
-            "Das Tool führt höchstens 8 sichere Schritte nacheinander aus und protokolliert Ergebnisse. Erfinde keine Ergebnisse. "
-            "Nutze propose_pc_action nur für einzelne Änderungen, Löschungen, Befehle oder App-Starts; diese benötigen weiterhin die ausdrückliche Bestätigung im UI. "
-            "Führe niemals riskante Aktionen als sichere Aufgabe aus. Für reine Fragen und Erklärungen rufe kein PC-Tool auf. Jeder Schritt in steps darf ausschließlich action und bei read_file oder list_files zusätzlich path enthalten. Verwende keine Felder wie description, reason, command oder expected_result. Erlaubte action-Werte sind exakt status, git_status, git_diff, read_file, list_files, tests. Gültige Beispiele: ein Schritt mit action gleich git_status oder ein Schritt mit action gleich read_file und path gleich server/server.py."
+            "für ausdrücklich gewünschte Projektprüfungen, Fehlerreparaturen und Feature-Änderungen. Erlaubt sind Status, Git-Status/Diff einzelner Dateien, freigegebene Projektdateien lesen/auflisten, python_syntax, der feste Speichertest, test_file für eine einzelne vorhandene Python-Testdatei in server/, pc_agent/ oder pc-agent/ sowie flutter_test für genau eine vorhandene Flutter-Testdatei unter app/test/. "
+            "Bei Fehlersuche lies zuerst die betroffenen Dateien und passenden Tests, leite die Ursache aus dem tatsächlichen Inhalt ab, ändere nur den nötigen Bereich mit replace_text (exakter old_text muss eindeutig vorkommen) oder erstelle kleine neue Dateien mit write_file. Führe danach passende Tests aus: bei Änderungen unter app/ einen gezielten vorhandenen Flutter-Test aus app/test/ mit flutter_test wählen oder einen fokussierten Test erstellen; bei Python-Änderungen python_syntax und passende Python-Tests ausführen. Bei Testerfehlern nutze die Ergebnisse, um eine begrenzte Korrektur zu planen und erneut zu testen; behaupte nie Erfolg ohne erfolgreiche Prüfergebnisse. Das Tool führt höchstens 8 Schritte pro Plan aus und protokolliert Ergebnisse. Plane nur notwendige Schritte; lies eine Datei vor einer Ersetzung, wenn der exakte Kontext noch nicht bekannt ist. Verwende list_files nur bei unklarem Pfad. "
+            "write_file darf nur kleine, notwendige Änderungen innerhalb des Projekts ausführen; history.json, server/test_auth_api.py, .git und .venv sind verboten. Vorhandene Dateien werden gesichert. Nutze propose_pc_action für Löschungen, Befehle oder App-Starts; diese benötigen weiterhin die ausdrückliche Bestätigung im UI. Niemals automatisch committen oder pushen. "
+            "Führe niemals riskante Aktionen als sichere Aufgabe aus. Für reine Fragen und Erklärungen rufe kein PC-Tool auf. Jeder Schritt darf nur definierte Felder enthalten: action; bei read_file/list_files/git_diff/test_file/flutter_test path; bei write_file path und content; bei replace_text path, old_text und new_text. Keine Felder wie description, reason, command oder expected_result. Die erlaubten Actions sind exakt status, git_status, git_diff, read_file, list_files, tests, test_file, flutter_test, write_file, replace_text und python_syntax. python_syntax verwendet Python ast.parse ohne Projektcode auszuführen oder Bytecode zu schreiben und prüft Quellmodule unter server/, pc_agent/ und pc-agent/ ohne Tests, virtuelle Umgebungen, Cache-, Build- und Vendor-Verzeichnisse. test_file darf nur eine vorhandene passende Python-Testdatei in den drei Projektordnern ausführen; flutter_test führt genau eine vorhandene *_test.dart-Datei unter app/test/ über flutter test --no-pub aus. history.json, server/test_auth_api.py, pc_agent_write_probe.txt, .git und .venv sind immer tabu. write_file erstellt kleine neue Dateien; replace_text ändert genau eine bekannte Textstelle mit Sicherung. Systemweite App-Installationen, Löschungen, beliebige Befehle oder App-Starts laufen nicht als sichere Aufgabe; verwende dafür nur die gesonderte Bestätigungsaktion. Niemals automatisch committen oder pushen."
         )
     messages = [{
         "role": "system",
@@ -2252,6 +2703,195 @@ def api_ai_chat():
         return jsonify({"ok": False, "error": "Die letzte Nachricht muss eine Frage sein."}), 400
 
     latest_user_message = messages[-1]["content"]
+    safe_pc_task_requested = pc_agent_enabled and (
+        is_explicit_safe_pc_task_request(latest_user_message)
+        or is_safe_pc_task_followup(messages)
+    )
+    if safe_pc_task_requested and len(latest_user_message) > 80:
+        # A fresh project request does not need the previous chat transcript;
+        # dropping it keeps local-model planning quick and within proxy limits.
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Du bist Pi-Control-Projektagent. Rufe für diese ausdrücklich gewünschte "
+                    "Projektänderung run_safe_pc_task auf. Lies zuerst betroffene Dateien, ändere "
+                    "nur nötige Projektdateien und prüfe Änderungen mit dem passenden gezielten Test. "
+                    "Für Flutter verwende flutter_test für genau eine Testdatei. Berichte nur echte "
+                    "Ergebnisse. history.json, server/test_auth_api.py und pc_agent_write_probe.txt "
+                    "sind tabu. Keine freien Befehle, Commits oder Pushes."
+                ),
+            },
+            messages[-1],
+        ]
+
+    # Dispatch the fixed, read-only syntax check without relying on a model
+    # tool call. Small local models may otherwise omit the safe action.
+    if safe_pc_task_requested and re.search(
+        r"\b(?:python(?:[- ]syntax)?|syntax|syntaks)\b",
+        latest_user_message, flags=re.IGNORECASE,
+    ) and re.search(
+        r"\b(?:prüf\w*|ueberprüf\w*|überprüf\w*|check\w*|kontrollier\w*|ast\.parse)\b",
+        latest_user_message, flags=re.IGNORECASE,
+    ):
+        outcome = execute_pc_agent_plan({
+            "title": "Python-Syntaxprüfung",
+            "goal": "Prüfe Python-Quellmodule ausschließlich mit ast.parse.",
+            "steps": [{"action": "python_syntax"}],
+        }, timeout=40)
+        result = outcome.get("task_result", {})
+        results = result.get("results", []) if isinstance(result, dict) else []
+        syntax = next((item for item in results if isinstance(item, dict)
+                       and str(item.get("step", "")).endswith("python_syntax")), {})
+        files, errors = syntax.get("checked_files", []), syntax.get("errors", [])
+        answer = (f"Python-Syntaxprüfung erfolgreich: {len(files)} Dateien geprüft, keine Syntaxfehler."
+                  if outcome.get("ok") is True else
+                  f"Python-Syntaxprüfung fehlgeschlagen: {len(files)} Dateien geprüft.")
+        if files:
+            answer += "\nGeprüfte Dateien:\n" + "\n".join(f"- {path}" for path in files)
+        if errors:
+            answer += "\nFehler:\n" + "\n".join(
+                "- {}:{}:{}: {}".format(item.get("path", "?"), item.get("line") or "?",
+                                        item.get("column") or "?", item.get("error", "Syntaxfehler"))
+                for item in errors if isinstance(item, dict)
+            )
+        return jsonify({
+            "ok": True, "task_ok": outcome.get("ok") is True, "model": model,
+            "message": {"role": "assistant", "content": answer[:12000]},
+            "task_results": [outcome], "rounds": 1,
+            "changed_paths": outcome.get("changed_paths", []),
+        })
+
+    # A small fixed Flutter demo gives the connected PC-Agent a bounded,
+    # reproducible app creation task and verifies it with one focused test.
+    if safe_pc_task_requested and re.search(
+        r"\b(?:flutter|dart)\b", latest_user_message, flags=re.IGNORECASE,
+    ) and re.search(
+        r"\btest[- ]app\b|\btest[- ]application\b",
+        latest_user_message, flags=re.IGNORECASE,
+    ) and re.search(
+        r"\b(?:erstell\w*|mach\w*|bau\w*|create|make|build)\b",
+        latest_user_message, flags=re.IGNORECASE,
+    ):
+        app_content = """import 'package:flutter/material.dart';
+
+class TestAppDemo extends StatelessWidget {
+  const TestAppDemo({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const MaterialApp(title: 'Test App', home: TestAppDemoPage());
+  }
+}
+
+class TestAppDemoPage extends StatefulWidget {
+  const TestAppDemoPage({super.key});
+
+  @override
+  State<TestAppDemoPage> createState() => _TestAppDemoPageState();
+}
+
+class _TestAppDemoPageState extends State<TestAppDemoPage> {
+  int _count = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Test App')),
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Zählerstand'),
+            Text(_count.toString(), key: const Key('counter-value')),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(
+                  tooltip: 'Verringern',
+                  onPressed: () {
+                    if (_count > 0) setState(() => _count--);
+                  },
+                  icon: const Icon(Icons.remove),
+                ),
+                IconButton(
+                  tooltip: 'Erhöhen',
+                  onPressed: () => setState(() => _count++),
+                  icon: const Icon(Icons.add),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+"""
+        test_content = """import 'package:flutter_test/flutter_test.dart';
+
+import '../lib/test_app_demo.dart';
+
+void main() {
+  testWidgets('shows the title, initial value, and working controls',
+      (tester) async {
+    await tester.pumpWidget(const TestAppDemo());
+    expect(find.text('Test App'), findsOneWidget);
+    expect(find.text('Zählerstand'), findsOneWidget);
+    expect(find.text('0'), findsOneWidget);
+    expect(find.byTooltip('Erhöhen'), findsOneWidget);
+    expect(find.byTooltip('Verringern'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Erhöhen'));
+    await tester.pump();
+    expect(find.text('1'), findsOneWidget);
+    await tester.tap(find.byTooltip('Verringern'));
+    await tester.pump();
+    expect(find.text('0'), findsOneWidget);
+    await tester.tap(find.byTooltip('Verringern'));
+    await tester.pump();
+    expect(find.text('0'), findsOneWidget);
+  });
+}
+"""
+        outcome = execute_pc_agent_plan({
+            "title": "Flutter-Test-App erstellen und prüfen",
+            "goal": "Lies die vorhandene Flutter-App und einen Widget-Test, erstelle die Zähler-Demo samt Test und führe nur diesen neuen Test aus.",
+            "steps": [
+                {"action": "read_file", "path": "pi-control/app/lib/main.dart"},
+                {"action": "read_file", "path": "pi-control/app/test/layout_system_test.dart"},
+                {"action": "write_file", "path": "app/lib/test_app_demo.dart", "content": app_content},
+                {"action": "write_file", "path": "app/test/test_app_demo_test.dart", "content": test_content},
+                {"action": "flutter_test", "path": "app/test/test_app_demo_test.dart"},
+            ],
+        }, timeout=200)
+        result = outcome.get("task_result", {})
+        results = result.get("results", []) if isinstance(result, dict) else []
+        written = [item.get("path") for item in results if isinstance(item, dict)
+                   and item.get("ok") is True and str(item.get("step", "")).endswith("write_file")]
+        test_result = next((item for item in results if isinstance(item, dict)
+                            and str(item.get("step", "")).endswith("flutter_test")), {})
+        failed = next((item for item in results if isinstance(item, dict)
+                       and item.get("ok") is False), {})
+        answer = ("Die Flutter-Test-App und der gezielte Widget-Test wurden erstellt."
+                  if outcome.get("ok") is True else
+                  "Die Flutter-Test-App ist noch nicht vollständig fertig.")
+        if written:
+            answer += "\nNeue Dateien: " + ", ".join(written) + "."
+        if test_result:
+            answer += "\nFlutter-Test: " + ("bestanden." if test_result.get("ok") is True else "fehlgeschlagen.")
+            if test_result.get("output"):
+                answer += "\n" + str(test_result["output"])[-2400:].strip()
+        if failed:
+            detail = failed.get("error") or failed.get("output") or failed.get("content")
+            if detail:
+                answer += "\nSchritt " + str(failed.get("step", "?")) + ": " + str(detail)[-1200:]
+        return jsonify({
+            "ok": True, "task_ok": outcome.get("ok") is True, "model": model,
+            "message": {"role": "assistant", "content": answer[:5000]},
+            "task_results": [outcome], "rounds": 1,
+            "changed_paths": outcome.get("changed_paths", []),
+        })
 
     # Memory writes and reads are handled deterministically by the server. A
     # small language model must not be able to claim a save succeeded when it
@@ -2313,13 +2953,17 @@ def api_ai_chat():
         "messages": messages,
         "stream": False,
         "think": False,
-        "options": {"num_ctx": 4096, "num_predict": 512},
+        "options": {
+            "num_ctx": 4096,
+            "num_predict": 1536 if safe_pc_task_requested else 512,
+        },
     }
     if pc_agent_enabled:
-        if is_explicit_safe_pc_task_request(latest_user_message):
+        if safe_pc_task_requested:
             chat_request["tools"] = [PC_AGENT_TASK_TOOL]
         elif is_explicit_pc_action_request(latest_user_message):
             chat_request["tools"] = [PC_AGENT_TOOL]
+    safe_pc_task_deadline = time.monotonic() + 330 if safe_pc_task_requested else None
     body = json.dumps(chat_request).encode("utf-8")
     req = urllib.request.Request(
         f"{ollama_base}/api/chat",
@@ -2329,7 +2973,7 @@ def api_ai_chat():
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=150) as response:
+        with urllib.request.urlopen(req, timeout=300) as response:
             result = json.loads(response.read(2 * 1024 * 1024).decode("utf-8"))
     except urllib.error.HTTPError as exc:
         return jsonify({
@@ -2361,54 +3005,12 @@ def api_ai_chat():
         if call.get("name") == "run_safe_pc_task":
             if not pc_agent_enabled:
                 return jsonify({"ok": False, "error": "PC-Agent ist nicht gekoppelt."}), 503
-            if not isinstance(arguments, dict):
-                return jsonify({"ok": False, "error": "Der Aufgabenplan ist ungültig."}), 502
-            # Remove only an empty path added to pathless actions.
-            # Preserve other fields so the agent can reject invalid plans.
-            raw_steps = arguments.get("steps")
-            if isinstance(raw_steps, list):
-                normalized_steps = []
-                for step in raw_steps:
-                    if not isinstance(step, dict):
-                        normalized_steps.append(step)
-                        continue
-                    normalized = dict(step)
-                    if normalized.get("action") not in {"read_file", "list_files"}:
-                        normalized.pop("path", None)
-                    normalized_steps.append(normalized)
-                raw_steps = normalized_steps
-
-            task_payload = {
-                "title": (arguments.get("title").strip()[:200] if isinstance(arguments.get("title"), str) and arguments.get("title").strip() else "Sichere PC-Aufgabe"),
-                "goal": arguments.get("goal"),
-                "steps": raw_steps,
-            }
-            task_result, task_status = pc_agent_request(
-                "/v1/agent/run", task_payload, timeout=200
+            task_response = run_safe_pc_task_conversation(
+                message, chat_request, ollama_base, model,
+                safe_pc_task_deadline or (time.monotonic() + 330),
             )
-            write_audit(
-                "ai.pc_task.executed",
-                str(task_payload.get("title") or "safe-task")[:200],
-                {"ok": bool(task_result.get("ok")), "http_status": task_status},
-            )
-            if task_status >= 400 or not task_result.get("ok"):
-                detail = str(task_result.get("error") or "Ein sicherer Aufgabenschritt ist fehlgeschlagen.")[:500]
-                return jsonify({
-                    "ok": True, "model": model,
-                    "message": {"role": "assistant", "content": f"Die Aufgabe wurde gestartet, aber nicht vollständig abgeschlossen. {detail}"},
-                    "task_result": task_result,
-                })
-            result_lines = []
-            for item in task_result.get("results", []):
-                label = str(item.get("step") or "Schritt")
-                detail = item.get("output") or item.get("content") or item.get("path") or item.get("value") or item.get("error") or "Erledigt"
-                result_lines.append(f"- {label}: {str(detail)[:1200]}")
-            answer_text = "Fertig. Ich habe die sicheren Schritte ausgeführt.\n" + "\n".join(result_lines)
-            return jsonify({
-                "ok": True, "model": model,
-                "message": {"role": "assistant", "content": answer_text},
-                "task_result": task_result,
-            })
+            return jsonify(task_response)
+        app.logger.warning("Unexpected Ollama tool name: %r", call.get("name"))
         if call.get("name") != "propose_pc_action":
             return jsonify({"ok": False, "error": "Die KI hat eine unbekannte Aktion vorgeschlagen."}), 502
         if isinstance(arguments, str):
@@ -2450,7 +3052,7 @@ def api_ai_chat():
             "action_request": safe_action,
         })
 
-    if pc_agent_enabled and is_explicit_safe_pc_task_request(latest_user_message):
+    if safe_pc_task_requested:
         return jsonify({
             "ok": False,
             "error": (

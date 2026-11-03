@@ -1,15 +1,21 @@
 """Bounded multi-step task execution for the Pi-Control PC Agent.
 
-Only explicitly enumerated read-only actions are executable by an unattended plan.
+Only explicitly enumerated bounded actions are executable by an unattended plan.
 The runner never interprets natural-language text as a command and never performs
-file writes, deletes, app launches, or arbitrary command execution.
+deletes, app launches, or arbitrary command execution. File changes are delegated
+to the API's constrained, backup-producing project-file operations.
 """
 from __future__ import annotations
 
 from typing import Any, Callable
 
 MAX_STEPS = 8
-ALLOWED_ACTIONS = {"status", "git_status", "git_diff", "read_file", "list_files", "tests"}
+ALLOWED_ACTIONS = {
+    "status", "git_status", "git_diff", "read_file", "list_files", "tests",
+    "test_file", "flutter_test", "write_file", "replace_text", "python_syntax",
+}
+MAX_WRITE_CONTENT_CHARS = 20_000
+MAX_REPLACE_TEXT_CHARS = 20_000
 STEP_FIELDS = {
     "status": {"action"},
     "git_status": {"action"},
@@ -17,6 +23,11 @@ STEP_FIELDS = {
     "read_file": {"action", "path"},
     "list_files": {"action", "path"},
     "tests": {"action"},
+    "test_file": {"action", "path"},
+    "flutter_test": {"action", "path"},
+    "python_syntax": {"action"},
+    "write_file": {"action", "path", "content"},
+    "replace_text": {"action", "path", "old_text", "new_text"},
 }
 
 
@@ -49,7 +60,7 @@ def validate_git_diff_path(path: Any) -> str:
     return path
 
 
-def validate_plan(title: Any, goal: Any, steps: Any) -> list[dict[str, str]]:
+def validate_plan(title: Any, goal: Any, steps: Any) -> list[dict[str, Any]]:
     if not isinstance(title, str) or not title.strip() or len(title) > 200:
         raise PlanValidationError("title muss nichtleerer Text mit höchstens 200 Zeichen sein.")
     if not isinstance(goal, str) or not goal.strip() or len(goal) > 4000:
@@ -70,13 +81,32 @@ def validate_plan(title: Any, goal: Any, steps: Any) -> list[dict[str, str]]:
             unknown = sorted(set(step) - STEP_FIELDS[action])
             raise PlanValidationError(f"Schritt {index} enthält unbekannte Felder: {chr(44).join(unknown)}.")
         item = {"action": action}
-        if action in {"read_file", "list_files"}:
+        if action in {"read_file", "list_files", "write_file", "replace_text", "test_file", "flutter_test", "git_diff"}:
             path = step.get("path", "." if action == "list_files" else "")
-            if not isinstance(path, str) or not path.strip() or len(path) > 1000:
-                raise PlanValidationError(f"Schritt {index} benötigt einen gültigen Pfad.")
-            item["path"] = path
-        if action == "git_diff":
-            item["path"] = validate_git_diff_path(step.get("path", ""))
+            if action == "git_diff":
+                item["path"] = validate_git_diff_path(path)
+            else:
+                if not isinstance(path, str) or not path.strip() or len(path) > 1000 or "\x00" in path:
+                    raise PlanValidationError(f"Schritt {index} benötigt einen gültigen Pfad.")
+                item["path"] = path
+        if action == "write_file":
+            content = step.get("content")
+            if not isinstance(content, str):
+                raise PlanValidationError(f"Schritt {index} benötigt Text im Feld content.")
+            if len(content) > MAX_WRITE_CONTENT_CHARS or "\x00" in content:
+                raise PlanValidationError(f"Schritt {index}: content darf höchstens {MAX_WRITE_CONTENT_CHARS} Zeichen enthalten und kein NUL.")
+            item["content"] = content
+        if action == "replace_text":
+            old_text = step.get("old_text")
+            new_text = step.get("new_text")
+            if not isinstance(old_text, str) or not old_text:
+                raise PlanValidationError(f"Schritt {index} benötigt nichtleeren Text im Feld old_text.")
+            if not isinstance(new_text, str):
+                raise PlanValidationError(f"Schritt {index} benötigt Text im Feld new_text.")
+            if any("\x00" in value or len(value) > MAX_REPLACE_TEXT_CHARS for value in (old_text, new_text)):
+                raise PlanValidationError(f"Schritt {index}: old_text und new_text dürfen höchstens {MAX_REPLACE_TEXT_CHARS} Zeichen und kein NUL enthalten.")
+            item["old_text"] = old_text
+            item["new_text"] = new_text
         normalized.append(item)
     return normalized
 
@@ -86,7 +116,7 @@ def run_plan(
     title: str,
     goal: str,
     steps: Any,
-    execute: Callable[[dict[str, str]], dict[str, Any]],
+    execute: Callable[[dict[str, Any]], dict[str, Any]],
 ) -> dict[str, Any]:
     """Validate first, then run safe steps sequentially and journal every result."""
     plan = validate_plan(title, goal, steps)

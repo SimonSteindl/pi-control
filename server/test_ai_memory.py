@@ -91,6 +91,45 @@ class AiMemoryTests(unittest.TestCase):
         self.assertFalse(self.server.is_explicit_pc_action_request("Wie öffne ich den Browser?"))
         self.assertFalse(self.server.is_explicit_pc_action_request("Erkläre mir den PC-Agent"))
 
+    def test_safe_pc_task_detector_routes_project_repair_and_python_syntax(self):
+        for prompt in (
+            "Prüfe die Python-Syntax im Projekt",
+            "Finde den Fehler im Projekt und repariere ihn",
+            "Teste die neue Funktion",
+            "Füge dem Projekt ein Feature hinzu",
+            "Füge dem Projekt ein kleines Spiel hinzu",
+            "Kannst du bitte den Code auf Bugs prüfen?",
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertTrue(self.server.is_explicit_safe_pc_task_request(prompt))
+
+    def test_safe_pc_task_detector_keeps_questions_and_installations_out(self):
+        for prompt in (
+            "Wie repariere ich Python-Syntaxfehler?",
+            "Was ist python_syntax?",
+            "Installiere die App auf meinem Rechner",
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertFalse(self.server.is_explicit_safe_pc_task_request(prompt))
+        self.assertTrue(
+            self.server.is_explicit_pc_action_request("Installiere die App auf meinem Rechner")
+        )
+
+    def test_pc_task_detector_understands_short_followups_only_in_project_context(self):
+        self.assertTrue(self.server.is_safe_pc_task_followup([
+            {"role": "user", "content": "Prüfe die Python-Syntax im Projekt."},
+            {"role": "assistant", "content": "Ich prüfe das jetzt."},
+            {"role": "user", "content": "teste es zwischendurch"},
+        ]))
+        self.assertTrue(self.server.is_safe_pc_task_followup([
+            {"role": "user", "content": "Finde den Fehler im Code."},
+            {"role": "user", "content": "mach es"},
+        ]))
+        self.assertFalse(self.server.is_safe_pc_task_followup([
+            {"role": "user", "content": "Was ist Python?"},
+            {"role": "user", "content": "teste es"},
+        ]))
+
 
 if __name__ == "__main__":
     unittest.main()

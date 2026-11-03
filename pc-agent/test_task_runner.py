@@ -42,8 +42,58 @@ class TaskRunnerTests(unittest.TestCase):
         self.assertEqual(plan[1], {"action": "read_file", "path": "README.md"})
         self.assertEqual(plan[2], {"action": "list_files", "path": "."})
 
-    def test_rejects_arbitrary_commands_and_mutations(self):
-        for action in ("run_command", "write_file", "delete_file", "open"):
+    def test_accepts_python_syntax_as_pathless_read_only_action(self):
+        plan = validate_plan("Syntax", "Check Python syntax", [
+            {"action": "python_syntax"},
+        ])
+        self.assertEqual(plan, [{"action": "python_syntax"}])
+        with self.assertRaises(PlanValidationError):
+            validate_plan("Syntax", "Check Python syntax", [
+                {"action": "python_syntax", "path": "server"},
+            ])
+
+    def test_accepts_focused_test_file_and_text_replacement_steps(self):
+        plan = validate_plan("Repair", "Fix and test a project change", [
+            {"action": "replace_text", "path": "server/server.py", "old_text": "before", "new_text": "after"},
+            {"action": "test_file", "path": "server/test_ai_memory.py"},
+        ])
+        self.assertEqual(plan[0]["action"], "replace_text")
+        self.assertEqual(plan[1], {"action": "test_file", "path": "server/test_ai_memory.py"})
+        for step in (
+            {"action": "replace_text", "path": "server.py", "old_text": "", "new_text": "x"},
+            {"action": "replace_text", "path": "server.py", "old_text": "x", "new_text": "x" * 20001},
+            {"action": "test_file", "path": "server/test_ai_memory.py", "command": ["python"]},
+        ):
+            with self.subTest(step=step), self.assertRaises(PlanValidationError):
+                validate_plan("Repair", "Fix and test", [step])
+
+    def test_accepts_one_scoped_flutter_test_and_rejects_extra_fields(self):
+        self.assertEqual(
+            validate_plan("Flutter", "Test one app feature", [
+                {"action": "flutter_test", "path": "app/test/widget_test.dart"},
+            ]),
+            [{"action": "flutter_test", "path": "app/test/widget_test.dart"}],
+        )
+        with self.assertRaises(PlanValidationError):
+            validate_plan("Flutter", "Test one app feature", [
+                {"action": "flutter_test", "path": "app/test/widget_test.dart", "command": ["sh"]},
+            ])
+
+    def test_accepts_bounded_write_file_and_rejects_malformed_writes(self):
+        plan = validate_plan("Edit", "Update a project file", [
+            {"action": "write_file", "path": "docs/note.md", "content": "hello"}
+        ])
+        self.assertEqual(plan[0], {"action": "write_file", "path": "docs/note.md", "content": "hello"})
+        for step in (
+            {"action": "write_file", "path": "note.md"},
+            {"action": "write_file", "path": "note.md", "content": "x" * 20001},
+            {"action": "write_file", "path": "note.md", "content": "ok", "command": "echo bad"},
+        ):
+            with self.subTest(step=step), self.assertRaises(PlanValidationError):
+                validate_plan("Edit", "Update a project file", [step])
+
+    def test_rejects_arbitrary_commands_and_deletions(self):
+        for action in ("run_command", "delete_file", "open"):
             with self.subTest(action=action), self.assertRaises(PlanValidationError):
                 validate_plan("Unsafe", "Do something", [{"action": action}])
 

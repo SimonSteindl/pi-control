@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import platform
@@ -43,6 +44,9 @@ SENSITIVE_NAMES = {
     "credentials", "credentials.json", "token",
 }
 SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
+PROTECTED_WORKSPACE_PATHS = {
+    "history.json", "server/test_auth_api.py", "pc_agent_write_probe.txt",
+}
 
 
 def token_path() -> Path:
@@ -76,7 +80,27 @@ def load_or_create_token() -> str:
     return token
 
 
-def resolve_user_path(access_root: Path, supplied: str) -> Path:
+def is_protected_workspace_path(workspace: Path | None, target: Path, *, include_parent_dirs: bool = False) -> bool:
+    if workspace is None:
+        return False
+    root = workspace.expanduser().resolve()
+    candidate = target.expanduser().resolve(strict=False)
+    try:
+        relative = candidate.relative_to(root).as_posix().lower()
+    except ValueError:
+        return False
+    if relative in PROTECTED_WORKSPACE_PATHS:
+        return True
+    if not include_parent_dirs:
+        return False
+    prefix = "" if relative == "." else relative.rstrip("/") + "/"
+    return any(protected.startswith(prefix) for protected in PROTECTED_WORKSPACE_PATHS)
+
+
+def resolve_user_path(
+    access_root: Path, supplied: str, *, workspace: Path | None = None,
+    include_protected_parent_dirs: bool = False,
+) -> Path:
     if not supplied.strip():
         raise ValueError("Bitte einen Dateipfad angeben.")
     candidate = Path(supplied).expanduser()
@@ -87,6 +111,10 @@ def resolve_user_path(access_root: Path, supplied: str) -> Path:
     target = candidate.resolve()
     if target != access_root and access_root not in target.parents:
         raise ValueError("Zugriff außerhalb des freigegebenen Benutzerordners ist gesperrt.")
+    if is_protected_workspace_path(
+        workspace, target, include_parent_dirs=include_protected_parent_dirs
+    ):
+        raise ValueError("Dieser Projektpfad ist ausdrücklich geschützt.")
     relative_parts = target.relative_to(access_root).parts
     if any(part.lower() in SENSITIVE_PARTS for part in relative_parts):
         raise ValueError("Dieser Ordner enthält private Zugangsdaten und ist standardmäßig gesperrt.")
@@ -95,13 +123,323 @@ def resolve_user_path(access_root: Path, supplied: str) -> Path:
     return target
 
 
-def safe_file(access_root: Path, supplied: str) -> Path:
-    target = resolve_user_path(access_root, supplied)
+def safe_file(access_root: Path, supplied: str, *, workspace: Path | None = None) -> Path:
+    target = resolve_user_path(access_root, supplied, workspace=workspace)
     if not target.is_file():
         raise ValueError("Datei nicht gefunden.")
     if target.stat().st_size > MAX_FILE_BYTES:
         raise ValueError("Datei ist zu groß (Limit 1 MB).")
     return target
+
+
+AUTO_WRITE_MAX_BYTES = 20_000
+def safe_workspace_write(
+    workspace: Path, supplied: str, content: str, *,
+    backup_root: Path | None = None, max_bytes: int = AUTO_WRITE_MAX_BYTES,
+) -> dict:
+    """Write a small file inside the project, backing up any existing file first."""
+    if not isinstance(supplied, str) or not supplied.strip() or "\x00" in supplied:
+        raise ValueError("Bitte einen gültigen Projektpfad angeben.")
+    if not isinstance(content, str) or "\x00" in content:
+        raise ValueError("Dateiinhalt muss gültiger Text ohne NUL sein.")
+    payload = content.encode("utf-8")
+    if len(payload) > max_bytes or max_bytes > MAX_FILE_BYTES:
+        raise ValueError(f"Automatische Dateiänderungen sind auf {max_bytes} UTF-8-Bytes begrenzt.")
+
+    root = workspace.expanduser().absolute()
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("Projektordner ist ungültig.")
+    given = Path(supplied).expanduser()
+    candidate = given if given.is_absolute() else root / given
+    candidate = Path(os.path.abspath(str(candidate)))  # lexical normalization; does not follow links
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError:
+        raise ValueError("Automatische Änderungen sind nur innerhalb des Pi-Control-Projekts erlaubt.") from None
+    if not relative.parts:
+        raise ValueError("Der Projektordner selbst kann nicht überschrieben werden.")
+    rel_posix = relative.as_posix()
+    parts = tuple(part.lower() for part in relative.parts)
+    if any(part in {".git", ".venv"} for part in parts):
+        raise ValueError("Änderungen an .git und .venv sind gesperrt.")
+    if rel_posix.lower() in PROTECTED_WORKSPACE_PATHS:
+        raise ValueError("Diese Datei ist ausdrücklich vor automatischen Änderungen geschützt.")
+    if any(part in SENSITIVE_PARTS for part in parts):
+        raise ValueError("Dieser Pfad ist wegen möglicher Zugangsdaten gesperrt.")
+    if relative.name.lower() in SENSITIVE_NAMES or relative.suffix.lower() in SENSITIVE_SUFFIXES:
+        raise ValueError("Dateien mit möglichen Zugangsdaten oder privaten Schlüsseln sind gesperrt.")
+
+    current = root
+    for part in relative.parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("Symbolische Links sind für automatische Änderungen gesperrt.")
+        if not current.exists() or not current.is_dir():
+            raise ValueError("Der übergeordnete Ordner muss bereits existieren.")
+    target = current / relative.parts[-1]
+    if target.is_symlink():
+        raise ValueError("Symbolische Links sind für automatische Änderungen gesperrt.")
+    if target.exists() and not target.is_file():
+        raise ValueError("Ziel ist keine reguläre Datei.")
+    try:
+        target.resolve(strict=False).relative_to(root.resolve(strict=True))
+    except ValueError:
+        raise ValueError("Zugriff außerhalb des Projektordners ist gesperrt.") from None
+
+    existed = target.exists()
+    backup = None
+    if existed:
+        if target.stat().st_size > MAX_FILE_BYTES:
+            raise ValueError("Die vorhandene Datei ist zu groß für eine automatische Änderung.")
+        backup_dir = (backup_root or (Path.home() / ".pi-control-agent" / "backups")).expanduser()
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup = backup_dir / f"pi-control-auto-{time.time_ns()}-{relative.name}.bak"
+        shutil.copy2(target, backup)
+
+    fd, temporary = tempfile.mkstemp(prefix=".pi-control-auto-write-", dir=str(target.parent))
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+    return {"ok": True, "path": rel_posix, "bytes": len(payload), "created": not existed,
+            "backup": str(backup) if backup else None}
+
+
+def safe_workspace_replace(
+    workspace: Path, supplied: str, old_text: str, new_text: str,
+    *, backup_root: Path | None = None,
+) -> dict:
+    """Replace one exact, unique text span in an existing project file."""
+    if not isinstance(supplied, str) or not supplied.strip() or "\x00" in supplied:
+        raise ValueError("Bitte einen gültigen Projektpfad angeben.")
+    if Path(supplied).is_absolute() or "\\" in supplied:
+        raise ValueError("replace_text erlaubt nur relative Projektpfade.")
+    relative = Path(supplied)
+    if any(part in {"", ".", ".."} for part in relative.parts):
+        raise ValueError("Ungültiger Projektpfad.")
+    if any(part.lower() in {".git", ".venv"} for part in relative.parts):
+        raise ValueError("Änderungen an .git und .venv sind gesperrt.")
+    rel_posix = relative.as_posix()
+    if rel_posix.lower() in PROTECTED_WORKSPACE_PATHS:
+        raise ValueError("Diese Datei ist ausdrücklich vor automatischen Änderungen geschützt.")
+    if not isinstance(old_text, str) or not old_text or not isinstance(new_text, str):
+        raise ValueError("old_text muss nichtleerer Text und new_text Text sein.")
+    if any("\x00" in value or len(value) > MAX_WRITE_BYTES for value in (old_text, new_text)):
+        raise ValueError("Der Ersetzungstext ist ungültig oder zu groß.")
+
+    root = workspace.expanduser().absolute()
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("Projektordner ist ungültig.")
+    target = root / relative
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("Symbolische Links sind für automatische Änderungen gesperrt.")
+    try:
+        target.resolve(strict=False).relative_to(root.resolve(strict=True))
+    except ValueError:
+        raise ValueError("Zugriff außerhalb des Projektordners ist gesperrt.") from None
+    if not target.is_file():
+        raise ValueError("replace_text benötigt eine vorhandene reguläre Datei.")
+    if target.stat().st_size > MAX_FILE_BYTES:
+        raise ValueError("Die vorhandene Datei ist zu groß für eine automatische Änderung.")
+    if any(part.lower() in SENSITIVE_PARTS for part in relative.parts):
+        raise ValueError("Dieser Pfad ist wegen möglicher Zugangsdaten gesperrt.")
+    if relative.name.lower() in SENSITIVE_NAMES or relative.suffix.lower() in SENSITIVE_SUFFIXES:
+        raise ValueError("Dateien mit möglichen Zugangsdaten oder privaten Schlüsseln sind gesperrt.")
+
+    contents = target.read_text(encoding="utf-8")
+    occurrences = contents.count(old_text)
+    if occurrences != 1:
+        raise ValueError(f"old_text muss genau einmal vorkommen; gefunden: {occurrences}.")
+    updated = contents.replace(old_text, new_text, 1)
+    result = safe_workspace_write(
+        workspace, rel_posix, updated, backup_root=backup_root,
+        max_bytes=MAX_FILE_BYTES,
+    )
+    result["replacements"] = 1
+    return result
+
+
+PYTHON_SYNTAX_ROOTS = ("server", "pc_agent", "pc-agent")
+PYTHON_SYNTAX_EXCLUDED_DIRS = {
+    ".venv", "__pycache__", "build", "dist", "cache", ".cache", "vendor",
+    "node_modules", "tests", "test", ".pytest_cache", ".mypy_cache",
+    ".ruff_cache", "coverage",
+}
+PYTHON_SYNTAX_PROTECTED = {"history.json", "server/test_auth_api.py", "pc_agent_write_probe.txt"}
+
+
+def check_python_syntax(workspace: Path) -> dict:
+    """Parse eligible project Python files without executing code or writing bytecode."""
+    root = workspace.expanduser().absolute()
+    checked = []
+    errors = []
+    for source_root in PYTHON_SYNTAX_ROOTS:
+        base = root / source_root
+        if not base.is_dir() or base.is_symlink():
+            continue
+        for directory, dirnames, filenames in os.walk(base, followlinks=False):
+            dirnames[:] = sorted(
+                name for name in dirnames
+                if name.casefold() not in PYTHON_SYNTAX_EXCLUDED_DIRS
+                and not (Path(directory) / name).is_symlink()
+            )
+            for filename in sorted(filenames):
+                if not filename.lower().endswith(".py") or filename.casefold().startswith("test") or filename.casefold().endswith("_test.py"):
+                    continue
+                path = Path(directory) / filename
+                relative = path.relative_to(root).as_posix()
+                if relative.casefold() in PYTHON_SYNTAX_PROTECTED or path.is_symlink():
+                    continue
+                checked.append(relative)
+                try:
+                    source = path.read_text(encoding="utf-8")
+                    ast.parse(source, filename=relative)
+                except SyntaxError as exc:
+                    errors.append({
+                        "path": relative, "line": exc.lineno, "column": exc.offset,
+                        "error": exc.msg,
+                    })
+                except (OSError, UnicodeError) as exc:
+                    errors.append({
+                        "path": relative, "line": None, "column": None,
+                        "error": str(exc)[:300],
+                    })
+    return {"ok": not errors, "checked_files": checked, "errors": errors,
+            "checked_count": len(checked), "exit_code": 0 if not errors else 1}
+
+
+SAFE_TEST_ROOTS = {"server", "pc_agent", "pc-agent"}
+
+
+def run_project_test(workspace: Path, supplied: str) -> dict:
+    """Run one explicitly selected Python test module from a project test root."""
+    if not isinstance(supplied, str) or not supplied.strip() or "\x00" in supplied:
+        raise ValueError("Bitte einen gültigen Testpfad angeben.")
+    if Path(supplied).is_absolute() or "\\" in supplied:
+        raise ValueError("test_file erlaubt nur relative Projektpfade.")
+    relative = Path(supplied)
+    if any(part in {"", ".", ".."} for part in relative.parts):
+        raise ValueError("Ungültiger Testpfad.")
+    rel_posix = relative.as_posix()
+    if rel_posix.lower() in PROTECTED_WORKSPACE_PATHS:
+        raise ValueError("Dieser Testpfad ist ausdrücklich geschützt.")
+    if not relative.parts or relative.parts[0] not in SAFE_TEST_ROOTS:
+        raise ValueError("Tests sind nur in server/, pc_agent/ und pc-agent/ freigegeben.")
+    if not (relative.name.startswith("test_") or relative.name.endswith("_test.py")) or not relative.name.endswith(".py"):
+        raise ValueError("test_file benötigt eine Python-Testdatei mit test_...py oder ..._test.py.")
+    if any(part.lower() in {".git", ".venv", "__pycache__", "vendor", "node_modules"} for part in relative.parts):
+        raise ValueError("Tests in gesperrten Cache- oder Vendor-Verzeichnissen sind nicht erlaubt.")
+
+    root = workspace.expanduser().absolute()
+    candidate = root / relative
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("Symbolische Links sind für Testläufe gesperrt.")
+    try:
+        candidate.resolve(strict=True).relative_to(root.resolve(strict=True))
+    except (OSError, ValueError):
+        raise ValueError("Testdatei liegt außerhalb des Projektordners oder existiert nicht.") from None
+    if not candidate.is_file():
+        raise ValueError("Testpfad ist keine reguläre Datei.")
+    if candidate.stat().st_size > MAX_FILE_BYTES:
+        raise ValueError("Testdatei ist zu groß.")
+
+    project_python = root / ".venv" / "bin" / "python"
+    test_python = str(project_python) if project_python.is_file() else sys.executable
+    try:
+        result = subprocess.run(
+            [test_python, "-B", str(candidate)], cwd=root, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            timeout=180, check=False, shell=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stdout or b""
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", errors="replace")
+        return {"ok": False, "path": rel_posix, "exit_code": 124,
+                "output": str(output)[-10_000:], "error": "Testlauf hat das Zeitlimit überschritten."}
+    output = result.stdout or ""
+    return {"ok": result.returncode == 0, "path": rel_posix,
+            "exit_code": result.returncode, "output": output[-10_000:],
+            "truncated": len(output) > 10_000}
+
+
+def run_flutter_test(workspace: Path, supplied: str) -> dict:
+    """Run one existing Flutter test under app/test with a fixed command."""
+    if not isinstance(supplied, str) or not supplied.strip() or "\x00" in supplied:
+        raise ValueError("Bitte einen gültigen Flutter-Testpfad angeben.")
+    if Path(supplied).is_absolute() or "\\" in supplied:
+        raise ValueError("flutter_test erlaubt nur relative Projektpfade.")
+    relative = Path(supplied)
+    if any(part in {"", ".", ".."} for part in relative.parts):
+        raise ValueError("Ungültiger Flutter-Testpfad.")
+    if len(relative.parts) < 3 or tuple(part.casefold() for part in relative.parts[:2]) != ("app", "test"):
+        raise ValueError("flutter_test darf nur eine einzelne Datei unter app/test ausführen.")
+    if not relative.name.casefold().endswith("_test.dart"):
+        raise ValueError("flutter_test benötigt eine Dart-Testdatei mit der Endung _test.dart.")
+    if any(part.casefold() in {".git", ".dart_tool", "build", "vendor", "node_modules"} for part in relative.parts):
+        raise ValueError("Flutter-Tests in gesperrten Build- oder Vendor-Verzeichnissen sind nicht erlaubt.")
+
+    root = workspace.expanduser().absolute()
+    candidate = root / relative
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("Symbolische Links sind für Flutter-Testläufe gesperrt.")
+    try:
+        candidate.resolve(strict=True).relative_to(root.resolve(strict=True))
+    except (OSError, ValueError):
+        raise ValueError("Flutter-Testdatei liegt außerhalb des Projektordners oder existiert nicht.") from None
+    if not candidate.is_file():
+        raise ValueError("Flutter-Testpfad ist keine reguläre Datei.")
+    if candidate.stat().st_size > MAX_FILE_BYTES:
+        raise ValueError("Flutter-Testdatei ist zu groß.")
+    app_root = root / "app"
+    if not (app_root / "pubspec.yaml").is_file():
+        raise ValueError("Im app/-Ordner wurde kein Flutter-Projekt gefunden.")
+    flutter = shutil.which("flutter")
+    if not flutter:
+        user_flutter = Path.home() / ".local" / "share" / "flutter" / "bin" / "flutter"
+        if user_flutter.is_file() and os.access(user_flutter, os.X_OK):
+            flutter = str(user_flutter)
+    if not flutter:
+        return {"ok": False, "path": relative.as_posix(), "exit_code": 127,
+                "output": "", "error": "Flutter ist auf diesem PC nicht installiert oder nicht im PATH."}
+
+    test_path = Path(*relative.parts[1:]).as_posix()
+    command = [flutter, "test", "--no-pub", "--reporter", "compact", test_path]
+    try:
+        result = subprocess.run(
+            command, cwd=app_root, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            timeout=240, check=False, shell=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stdout or b""
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", errors="replace")
+        return {"ok": False, "path": relative.as_posix(), "exit_code": 124,
+                "output": str(output)[-10_000:], "error": "Flutter-Testlauf hat das Zeitlimit überschritten."}
+    except OSError as exc:
+        return {"ok": False, "path": relative.as_posix(), "exit_code": 127,
+                "output": "", "error": f"Flutter konnte nicht gestartet werden: {str(exc)[:250]}"}
+    output = result.stdout or ""
+    return {"ok": result.returncode == 0, "path": relative.as_posix(),
+            "exit_code": result.returncode, "output": output[-10_000:],
+            "truncated": len(output) > 10_000}
 
 
 def git_output(workspace: Path, *args: str) -> dict:
@@ -114,6 +452,16 @@ def git_output(workspace: Path, *args: str) -> dict:
         return {"ok": result.returncode == 0, "exit_code": result.returncode, "output": result.stdout[:12000]}
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"ok": False, "error": str(exc)[:300]}
+
+
+def safe_git_status(workspace: Path) -> dict:
+    """Report repository changes while excluding the user's protected paths."""
+    return git_output(
+        workspace, "--no-optional-locks", "status", "--short", "--branch", "--", ".",
+        ":(exclude)history.json",
+        ":(exclude)server/test_auth_api.py",
+        ":(exclude)pc_agent_write_probe.txt",
+    )
 
 
 def launch_app(app_name: str, workspace: Path) -> None:
@@ -257,7 +605,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         if parsed.path == "/v1/file":
             supplied = query.get("path", [""])[0]
             try:
-                target = safe_file(self.access_root, supplied)
+                target = safe_file(self.access_root, supplied, workspace=self.workspace)
                 self.send_json(200, {
                     "ok": True, "path": str(target),
                     "content": target.read_text(encoding="utf-8"),
@@ -268,7 +616,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         if parsed.path == "/v1/files":
             supplied = query.get("path", ["."])[0]
             try:
-                directory = resolve_user_path(self.access_root, supplied)
+                directory = resolve_user_path(self.access_root, supplied, workspace=self.workspace)
                 if not directory.is_dir():
                     raise ValueError("Der Pfad ist kein Ordner.")
                 entries = []
@@ -276,8 +624,10 @@ class AgentHandler(BaseHTTPRequestHandler):
                     for entry in iterator:
                         if len(entries) >= MAX_DIRECTORY_ENTRIES:
                             break
+                        if is_protected_workspace_path(self.workspace, Path(entry.path)):
+                            continue
                         try:
-                            child = resolve_user_path(self.access_root, entry.path)
+                            child = resolve_user_path(self.access_root, entry.path, workspace=self.workspace)
                             if child.is_dir():
                                 kind = "directory"
                             elif child.is_file():
@@ -336,21 +686,21 @@ class AgentHandler(BaseHTTPRequestHandler):
                                 "workspace": str(self.workspace),
                                 "git_available": git_available}
                     if action == "git_status":
-                        return git_output(self.workspace, "status", "--short", "--branch")
+                        return safe_git_status(self.workspace)
                     if action == "git_diff":
                         return git_output(
                             self.workspace, "diff", "--no-ext-diff",
                             "--no-textconv", "--", step["path"]
                         )
                     if action == "read_file":
-                        target = safe_file(self.access_root, step["path"])
+                        target = safe_file(self.access_root, step["path"], workspace=self.workspace)
                         content = target.read_text(encoding="utf-8")
                         output_limit = 12_000
                         return {"ok": True, "path": str(target),
                                 "content": content[:output_limit],
                                 "truncated": len(content) > output_limit}
                     if action == "list_files":
-                        directory = resolve_user_path(self.access_root, step["path"])
+                        directory = resolve_user_path(self.access_root, step["path"], workspace=self.workspace)
                         if not directory.is_dir():
                             raise ValueError("Der Pfad ist kein Ordner.")
                         entries = []
@@ -358,8 +708,12 @@ class AgentHandler(BaseHTTPRequestHandler):
                             for entry in iterator:
                                 if len(entries) >= MAX_DIRECTORY_ENTRIES:
                                     break
+                                if is_protected_workspace_path(self.workspace, Path(entry.path)):
+                                    continue
                                 try:
-                                    child = resolve_user_path(self.access_root, entry.path)
+                                    child = resolve_user_path(
+                                        self.access_root, entry.path, workspace=self.workspace
+                                    )
                                     if child.is_dir():
                                         kind = "directory"
                                     elif child.is_file():
@@ -372,6 +726,18 @@ class AgentHandler(BaseHTTPRequestHandler):
                         entries.sort(key=lambda item: (item["type"] != "directory", item["name"].lower()))
                         return {"ok": True, "path": str(directory), "entries": entries,
                                 "truncated": len(entries) >= MAX_DIRECTORY_ENTRIES}
+                    if action == "write_file":
+                        return safe_workspace_write(self.workspace, step["path"], step["content"])
+                    if action == "replace_text":
+                        return safe_workspace_replace(
+                            self.workspace, step["path"], step["old_text"], step["new_text"]
+                        )
+                    if action == "python_syntax":
+                        return check_python_syntax(self.workspace)
+                    if action == "test_file":
+                        return run_project_test(self.workspace, step["path"])
+                    if action == "flutter_test":
+                        return run_flutter_test(self.workspace, step["path"])
                     if action == "tests":
                         test_file = self.workspace / "server" / "test_ai_memory.py"
                         if not test_file.is_file():
@@ -453,7 +819,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                 encoded = content.encode("utf-8")
                 if len(encoded) > MAX_WRITE_BYTES:
                     raise ValueError("Datei ist größer als das Limit von 1 MB.")
-                target = resolve_user_path(self.access_root, supplied)
+                target = resolve_user_path(self.access_root, supplied, workspace=self.workspace)
                 if target == self.access_root:
                     raise ValueError("Der freigegebene Stammordner kann nicht überschrieben werden.")
                 if target.exists() and not target.is_file():
@@ -498,7 +864,10 @@ class AgentHandler(BaseHTTPRequestHandler):
                 supplied = body.get("path")
                 if not isinstance(supplied, str):
                     raise ValueError("path muss Text sein.")
-                target = resolve_user_path(self.access_root, supplied)
+                target = resolve_user_path(
+                    self.access_root, supplied, workspace=self.workspace,
+                    include_protected_parent_dirs=True,
+                )
                 if target == self.access_root:
                     raise ValueError("Der freigegebene Stammordner kann nicht gelöscht werden.")
                 if not target.exists() or not (target.is_file() or target.is_dir()):
