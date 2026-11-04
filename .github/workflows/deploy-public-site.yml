@@ -1,6 +1,14 @@
 name: Deploy public website to Cloudflare
 
+# Single deployment path for the `pi-control-public` Worker.
+# The Cloudflare Workers Builds Git integration for this Worker should be
+# disconnected so that only this workflow deploys.
+
 on:
+  pull_request:
+    paths:
+      - 'server/public-site/**'
+      - '.github/workflows/deploy-public-site.yml'
   push:
     branches: [main]
     paths:
@@ -11,13 +19,13 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: deploy-public-site
-  cancel-in-progress: true
-
 jobs:
-  deploy:
+  build:
+    name: Test and build public website
     runs-on: ubuntu-latest
+    concurrency:
+      group: public-site-build-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,11 +33,28 @@ jobs:
       - name: Validate public website
         run: python3 server/public-site/test_site.py
 
-      - name: Prepare only public assets
+      - name: Build dist (only index.html, robots.txt, sitemap.xml)
+        run: python3 server/public-site/build.py
+
+      - name: Validate Worker configuration (dry-run)
+        working-directory: server/public-site
         run: |
-          set -euo pipefail
-          mkdir -p server/public-site/dist
-          cp server/public-site/index.html server/public-site/robots.txt server/public-site/sitemap.xml server/public-site/dist/
+          # Dry-run needs no credentials; it must also work on pull requests
+          # where repository secrets are unavailable.
+          export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-00000000000000000000000000000000}"
+          npx --yes wrangler@4 deploy --dry-run
+
+  deploy:
+    name: Deploy public website
+    needs: build
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-public-site
+      cancel-in-progress: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Verify Cloudflare credentials
         env:
@@ -48,4 +73,5 @@ jobs:
           # Normalize the account ID in case the GitHub secret contains surrounding whitespace/newlines/quotes.
           CLOUDFLARE_ACCOUNT_ID="$(python3 -c 'import os; print(os.environ["CLOUDFLARE_ACCOUNT_ID"].strip().strip(chr(34) + chr(39)))')"
           export CLOUDFLARE_ACCOUNT_ID
+          # wrangler.jsonc runs build.py (checks + fresh dist/) before uploading.
           npx --yes wrangler@4 deploy
