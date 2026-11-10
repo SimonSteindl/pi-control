@@ -394,17 +394,9 @@ class PiLayoutFrame extends StatelessWidget {
       return LayoutBuilder(
         builder: (context, constraints) {
           if (constraints.maxWidth < 720) {
-            return Column(
-              children: [
-                _PiTopNavigation(
-                  items: items,
-                  selectedIndex: selectedIndex,
-                  onSelected: onSelected,
-                  compact: false,
-                ),
-                Expanded(child: child),
-              ],
-            );
+            // On phone-sized screens, use the bottom navigation bar instead
+            // of spending valuable vertical space on a second top navigation.
+            return child;
           }
           final extended = constraints.maxWidth >= 1050;
           return Row(
@@ -458,16 +450,24 @@ class PiLayoutFrame extends StatelessWidget {
     }
 
     if (style == PiLayoutStyle.compact) {
-      return Column(
-        children: [
-          _PiTopNavigation(
-            items: items,
-            selectedIndex: selectedIndex,
-            onSelected: onSelected,
-            compact: true,
-          ),
-          Expanded(child: child),
-        ],
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 720) {
+            // Keep phone navigation at the bottom for easier one-handed use.
+            return child;
+          }
+          return Column(
+            children: [
+              _PiTopNavigation(
+                items: items,
+                selectedIndex: selectedIndex,
+                onSelected: onSelected,
+                compact: true,
+              ),
+              Expanded(child: child),
+            ],
+          );
+        },
       );
     }
 

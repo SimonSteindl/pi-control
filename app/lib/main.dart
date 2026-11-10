@@ -2280,7 +2280,8 @@ class _DashboardPageState extends State<DashboardPage>
                 ),
               ),
       ),
-      bottomNavigationBar: maintenance || layoutStyle.ownsNavigation
+      bottomNavigationBar: maintenance ||
+              (layoutStyle.ownsNavigation && !narrowScreen)
           ? null
           : PiBottomNavigation(
               style: layoutStyle,
