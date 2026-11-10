@@ -454,7 +454,7 @@ class PiLayoutFrame extends StatelessWidget {
         builder: (context, constraints) {
           if (constraints.maxWidth < 720) {
             // Keep phone navigation at the bottom for easier one-handed use.
-            return Expanded(child: child);
+            return child;
           }
           return Column(
             children: [
