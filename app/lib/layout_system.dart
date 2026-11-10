@@ -396,7 +396,7 @@ class PiLayoutFrame extends StatelessWidget {
           if (constraints.maxWidth < 720) {
             // On phone-sized screens, use the bottom navigation bar instead
             // of spending valuable vertical space on a second top navigation.
-            return Expanded(child: child);
+            return child;
           }
           final extended = constraints.maxWidth >= 1050;
           return Row(
