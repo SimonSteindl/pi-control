@@ -99,9 +99,24 @@ ThemeData buildPiLayoutTheme(
   PiLayoutStyle style,
   Color accent,
 ) {
+  // Pi-Control redesign preview: a quieter graphite canvas, warm orange focus,
+  // high-contrast typography, and one consistent component language.
   final scheme = ColorScheme.fromSeed(
     seedColor: accent,
     brightness: Brightness.dark,
+    surface: const Color(0xFF15181E),
+  ).copyWith(
+    primary: accent,
+    secondary: const Color(0xFFFFB36B),
+    tertiary: const Color(0xFF65D6C4),
+    surface: const Color(0xFF15181E),
+    surfaceContainerLowest: const Color(0xFF0C0E12),
+    surfaceContainerLow: const Color(0xFF111419),
+    surfaceContainer: const Color(0xFF171B21),
+    surfaceContainerHigh: const Color(0xFF1D222A),
+    surfaceContainerHighest: const Color(0xFF252B34),
+    outline: const Color(0xFF343B46),
+    outlineVariant: const Color(0xFF2A3039),
   );
   final (
     background,
@@ -112,75 +127,77 @@ ThemeData buildPiLayoutTheme(
     gap,
   ) = switch (style) {
     PiLayoutStyle.aurora => (
-      const Color(0xFF07111F),
-      const Color(0xFF101D30),
-      26.0,
+      const Color(0xFF0B0D11),
+      const Color(0xFF15181E),
+      22.0,
       0.0,
-      20.0,
+      18.0,
       16.0,
     ),
     PiLayoutStyle.commandCenter => (
-      const Color(0xFF070B12),
-      const Color(0xFF101827),
-      20.0,
+      const Color(0xFF0B0D11),
+      const Color(0xFF15181E),
+      18.0,
       0.0,
       22.0,
       15.0,
     ),
     PiLayoutStyle.compact => (
-      const Color(0xFF0B0E13),
-      const Color(0xFF151920),
-      10.0,
+      const Color(0xFF0B0D11),
+      const Color(0xFF14171C),
+      14.0,
       0.0,
       12.0,
-      8.0,
+      9.0,
     ),
     PiLayoutStyle.classic => (
-      const Color(0xFF101318),
-      const Color(0xFF1B2028),
+      const Color(0xFF0D0F13),
+      const Color(0xFF171A20),
       16.0,
-      1.0,
+      0.0,
       16.0,
       12.0,
     ),
   };
 
   final dense = style == PiLayoutStyle.compact;
-  final border = BorderSide(color: Colors.white.withValues(alpha: 0.08));
+  final border = const BorderSide(color: Color(0xFF2A3039));
   final rounded = RoundedRectangleBorder(
     borderRadius: BorderRadius.circular(radius),
+    side: border,
+  );
+  final textTheme = base.textTheme.apply(
+    bodyColor: const Color(0xFFE8EBF0),
+    displayColor: const Color(0xFFF7F8FA),
   );
 
   return base.copyWith(
     colorScheme: scheme,
     scaffoldBackgroundColor: background,
     visualDensity: dense ? VisualDensity.compact : VisualDensity.standard,
-    textTheme: base.textTheme.copyWith(
-      headlineLarge: base.textTheme.headlineLarge?.copyWith(
-        fontWeight: FontWeight.w900,
-        letterSpacing: -1.1,
-        height: 1.05,
+    textTheme: textTheme.copyWith(
+      displayLarge: textTheme.displayLarge?.copyWith(
+        fontWeight: FontWeight.w900, letterSpacing: -1.5, height: 1.0,
       ),
-      headlineMedium: base.textTheme.headlineMedium?.copyWith(
-        fontWeight: FontWeight.w900,
-        letterSpacing: -0.7,
+      headlineLarge: textTheme.headlineLarge?.copyWith(
+        fontWeight: FontWeight.w900, letterSpacing: -1.0, height: 1.05,
       ),
-      headlineSmall: base.textTheme.headlineSmall?.copyWith(
-        fontWeight: FontWeight.w900,
-        letterSpacing: -0.5,
+      headlineMedium: textTheme.headlineMedium?.copyWith(
+        fontWeight: FontWeight.w900, letterSpacing: -0.7,
       ),
-      titleLarge: base.textTheme.titleLarge?.copyWith(
-        fontWeight: FontWeight.w800,
-        letterSpacing: -0.25,
+      headlineSmall: textTheme.headlineSmall?.copyWith(
+        fontWeight: FontWeight.w800, letterSpacing: -0.4,
       ),
-      titleMedium: base.textTheme.titleMedium?.copyWith(
-        fontWeight: FontWeight.w700,
+      titleLarge: textTheme.titleLarge?.copyWith(
+        fontWeight: FontWeight.w800, letterSpacing: -0.25,
       ),
-      bodyMedium: base.textTheme.bodyMedium?.copyWith(height: 1.4),
-      bodySmall: base.textTheme.bodySmall?.copyWith(
-        color: scheme.onSurfaceVariant,
-        height: 1.35,
+      titleMedium: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+      bodyLarge: textTheme.bodyLarge?.copyWith(height: 1.42),
+      bodyMedium: textTheme.bodyMedium?.copyWith(height: 1.42),
+      bodySmall: textTheme.bodySmall?.copyWith(
+        color: const Color(0xFFA4ACB8), height: 1.35,
       ),
+      labelLarge: textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
     ),
     extensions: [
       PiDesignTokens(
@@ -196,134 +213,171 @@ ThemeData buildPiLayoutTheme(
       elevation: elevation,
       margin: EdgeInsets.zero,
       surfaceTintColor: Colors.transparent,
+      clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(radius),
-        side: BorderSide(
-          color: style == PiLayoutStyle.aurora
-              ? scheme.primary.withValues(alpha: 0.12)
-              : style == PiLayoutStyle.commandCenter
-              ? scheme.primary.withValues(alpha: 0.16)
-              : Colors.white.withValues(alpha: 0.07),
-        ),
+        side: border,
       ),
     ),
-    dividerTheme: DividerThemeData(color: Colors.white.withValues(alpha: 0.08)),
+    dividerTheme: const DividerThemeData(
+      color: Color(0xFF292F38), thickness: 1, space: 1,
+    ),
     dialogTheme: DialogThemeData(
       backgroundColor: surface,
       surfaceTintColor: Colors.transparent,
       shape: rounded,
+      titleTextStyle: textTheme.titleLarge?.copyWith(
+        color: const Color(0xFFF7F8FA), fontWeight: FontWeight.w800,
+      ),
     ),
     bottomSheetTheme: BottomSheetThemeData(
       backgroundColor: surface,
       modalBackgroundColor: surface,
       surfaceTintColor: Colors.transparent,
       showDragHandle: true,
+      dragHandleColor: const Color(0xFF535C68),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(radius)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(radius + 4)),
+        side: border,
       ),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: const Color(0xFF0B1220),
+      fillColor: const Color(0xFF0E1116),
+      hintStyle: const TextStyle(color: Color(0xFF7E8794)),
+      labelStyle: const TextStyle(color: Color(0xFFB7BEC8)),
+      prefixIconColor: const Color(0xFF9CA5B1),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(radius * .62),
+        borderRadius: BorderRadius.circular(14),
         borderSide: border,
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(radius * .62),
+        borderRadius: BorderRadius.circular(14),
         borderSide: border,
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(radius * .62),
-        borderSide: BorderSide(color: scheme.primary, width: 1.6),
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide(color: accent, width: 1.6),
+      ),
+      errorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: Color(0xFFFF6B6B)),
       ),
       contentPadding: EdgeInsets.symmetric(
-        horizontal: dense ? 12 : 16,
-        vertical: dense ? 11 : 15,
+        horizontal: dense ? 12 : 16, vertical: dense ? 11 : 15,
       ),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
+        backgroundColor: accent,
+        foregroundColor: const Color(0xFF17100A),
+        disabledBackgroundColor: accent.withValues(alpha: .28),
         minimumSize: Size(0, dense ? 42 : 48),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(radius * .6),
-        ),
-        textStyle: const TextStyle(fontWeight: FontWeight.w800),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        textStyle: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: .1),
       ),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
+        foregroundColor: const Color(0xFFE8EBF0),
         minimumSize: Size(0, dense ? 40 : 46),
         side: border,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(radius * .6),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        textStyle: const TextStyle(fontWeight: FontWeight.w700),
+      ),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(
+        foregroundColor: const Color(0xFFFFA34D),
         textStyle: const TextStyle(fontWeight: FontWeight.w700),
       ),
     ),
     chipTheme: base.chipTheme.copyWith(
-      backgroundColor: surface,
-      selectedColor: scheme.primaryContainer,
+      backgroundColor: const Color(0xFF1A1F26),
+      selectedColor: accent.withValues(alpha: .18),
       side: border,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(radius * .5),
-      ),
+      labelStyle: const TextStyle(fontWeight: FontWeight.w700),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     ),
     listTileTheme: ListTileThemeData(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(radius * .58),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       contentPadding: EdgeInsets.symmetric(horizontal: dense ? 12 : 16),
+      iconColor: const Color(0xFFA8B0BC),
+      titleTextStyle: textTheme.titleMedium,
+      subtitleTextStyle: textTheme.bodySmall,
     ),
     snackBarTheme: SnackBarThemeData(
       behavior: SnackBarBehavior.floating,
-      backgroundColor: const Color(0xFF202A3B),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(radius * .55),
-      ),
+      backgroundColor: const Color(0xFF252B34),
+      contentTextStyle: const TextStyle(color: Color(0xFFF7F8FA)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
     ),
     progressIndicatorTheme: ProgressIndicatorThemeData(
-      color: scheme.primary,
-      linearTrackColor: scheme.primary.withValues(alpha: .12),
-      circularTrackColor: scheme.primary.withValues(alpha: .12),
+      color: accent,
+      linearTrackColor: accent.withValues(alpha: .15),
+      circularTrackColor: accent.withValues(alpha: .15),
     ),
-    tabBarTheme: TabBarThemeData(
-      dividerColor: Colors.white.withValues(alpha: .07),
-      indicatorColor: scheme.primary,
-      labelColor: scheme.primary,
-      unselectedLabelColor: scheme.onSurfaceVariant,
-      labelStyle: const TextStyle(fontWeight: FontWeight.w800),
-      unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w600),
+    tabBarTheme: const TabBarThemeData(
+      dividerColor: Color(0xFF292F38),
+      indicatorColor: Color(0xFFFF7900),
+      labelColor: Color(0xFFFFA34D),
+      unselectedLabelColor: Color(0xFF929BA8),
+      labelStyle: TextStyle(fontWeight: FontWeight.w800),
+      unselectedLabelStyle: TextStyle(fontWeight: FontWeight.w600),
     ),
     floatingActionButtonTheme: FloatingActionButtonThemeData(
-      backgroundColor: scheme.primary,
-      foregroundColor: scheme.onPrimary,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(radius * .8),
-      ),
+      backgroundColor: accent,
+      foregroundColor: const Color(0xFF17100A),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
     ),
-    navigationRailTheme: NavigationRailThemeData(
-      backgroundColor: surface,
-      indicatorColor: scheme.primary.withValues(alpha: .22),
-      selectedIconTheme: IconThemeData(color: scheme.primary),
+    navigationRailTheme: const NavigationRailThemeData(
+      backgroundColor: Color(0xFF111419),
+      indicatorColor: Color(0x2EFF7900),
+      selectedIconTheme: IconThemeData(color: Color(0xFFFFA34D)),
       selectedLabelTextStyle: TextStyle(
-        color: scheme.primary,
-        fontWeight: FontWeight.w800,
+        color: Color(0xFFFFA34D), fontWeight: FontWeight.w800,
       ),
+      unselectedIconTheme: IconThemeData(color: Color(0xFF8D96A3)),
+      unselectedLabelTextStyle: TextStyle(color: Color(0xFF8D96A3)),
     ),
-    appBarTheme: AppBarTheme(
+    appBarTheme: const AppBarTheme(
       elevation: 0,
       centerTitle: false,
-      backgroundColor: background,
+      backgroundColor: Color(0xFF0B0D11),
+      foregroundColor: Color(0xFFF7F8FA),
       surfaceTintColor: Colors.transparent,
     ),
     navigationBarTheme: NavigationBarThemeData(
-      height: style == PiLayoutStyle.compact ? 66 : 76,
-      backgroundColor: surface,
-      indicatorColor: scheme.primary.withValues(alpha: 0.22),
-      labelTextStyle: const WidgetStatePropertyAll(
-        TextStyle(fontWeight: FontWeight.w700),
-      ),
+      height: style == PiLayoutStyle.compact ? 66 : 72,
+      backgroundColor: const Color(0xFF111419),
+      surfaceTintColor: Colors.transparent,
+      indicatorColor: accent.withValues(alpha: .18),
+      labelTextStyle: WidgetStateProperty.resolveWith((states) => TextStyle(
+        fontWeight: states.contains(WidgetState.selected) ? FontWeight.w800 : FontWeight.w600,
+        fontSize: 11,
+        color: states.contains(WidgetState.selected) ? const Color(0xFFFFA34D) : const Color(0xFF8D96A3),
+      )),
+      iconTheme: WidgetStateProperty.resolveWith((states) => IconThemeData(
+        color: states.contains(WidgetState.selected) ? accent : const Color(0xFF8D96A3),
+      )),
+    ),
+    switchTheme: SwitchThemeData(
+      thumbColor: WidgetStateProperty.resolveWith((states) =>
+        states.contains(WidgetState.selected) ? accent : const Color(0xFF929BA8)),
+      trackColor: WidgetStateProperty.resolveWith((states) =>
+        states.contains(WidgetState.selected) ? accent.withValues(alpha: .38) : const Color(0xFF343B46)),
+    ),
+    checkboxTheme: CheckboxThemeData(
+      fillColor: WidgetStateProperty.resolveWith((states) =>
+        states.contains(WidgetState.selected) ? accent : Colors.transparent),
+      checkColor: const WidgetStatePropertyAll(Color(0xFF17100A)),
+      side: const BorderSide(color: Color(0xFF535C68)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(5)),
+    ),
+    radioTheme: RadioThemeData(
+      fillColor: WidgetStateProperty.resolveWith((states) =>
+        states.contains(WidgetState.selected) ? accent : const Color(0xFF929BA8)),
     ),
   );
 }
@@ -415,7 +469,7 @@ class PiLayoutFrame extends StatelessWidget {
                 selectedIndex: selectedIndex,
                 onDestinationSelected: onSelected,
                 groupAlignment: -0.78,
-                backgroundColor: const Color(0xFF0A111D),
+                backgroundColor: const Color(0xFF111419),
                 indicatorColor: Theme.of(context).colorScheme.primary
                     .withValues(alpha: 0.24),
                 leading: Padding(
@@ -603,7 +657,7 @@ class _PiTopNavigation extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: const Color(0xFF0C1421),
+      color: const Color(0xFF111419),
       child: SizedBox(
         height: compact ? 52 : 64,
         child: ListView.separated(
@@ -857,7 +911,7 @@ class _LayoutPreview extends StatelessWidget {
       height: 52,
       padding: const EdgeInsets.all(6),
       decoration: BoxDecoration(
-        color: const Color(0xFF080D15),
+        color: const Color(0xFF0B0D11),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: line.withValues(alpha: .25)),
       ),
